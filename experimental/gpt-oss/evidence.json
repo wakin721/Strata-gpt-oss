@@ -1,0 +1,63 @@
+{
+  "date": "2026-10-28",
+  "strata_base": "5e8a4cca7d690ac60ca37eb09e7d0e010099ad6d",
+  "ggml_reported_version": "0.24.0",
+  "ggml_source_sha256": {
+    "ggml/src/ggml-quants.c": "07143d7068936ae46b3c528b2f3d4bbb666e74d88992165716174d243573965d",
+    "ggml/src/ggml-impl.h": "43564db0238aebb7ed68501e346c194866b5dac218d1d37b26baff9f458c00d3",
+    "ggml/src/ggml-common.h": "0061131b615c5721fc88a78feeb22c1f8c450f1c2646a317d80796a653bf595c",
+    "ggml/src/ggml-cpu/ops.cpp": "3ad6c159f0e9c2e8cef589be2f41f8ca7221a4e465488ad13ae5bff55669158c",
+    "src/models/openai-moe.cpp": "dbde7196916f83db11239e3b98292c57c05a34d36825d24f6e3b48e6e8d8bd1f"
+  },
+  "cpu_only": true,
+  "generation_supported": false,
+  "synthetic_expert_cases": 24,
+  "mxfp4_scale_encodings": 256,
+  "real_expert_reference": "GGML MXFP4 decoding followed by GGML F32 graph",
+  "real_expert_max_abs_error": 3.8147e-06,
+  "real_expert_relative_l2": 6.93866e-07,
+  "real_expert_source": {
+    "generation_supported": false,
+    "source_url": "https://huggingface.co/ggml-org/gpt-oss-120b-GGUF/resolve/7200b74/gpt-oss-120b-MXFP4.gguf",
+    "source_layers": 36,
+    "source_experts": 128,
+    "slices": [
+      {
+        "tensor": "blk.0.ffn_gate_exps.weight",
+        "start": 1838905376,
+        "bytes": 4406400,
+        "sha256": "8d9f8042b7cdee0e8813f5224382089fef3e30dc41646b63d2d5e6eb3569628f"
+      },
+      {
+        "tensor": "blk.0.ffn_gate_exps.bias",
+        "start": 1837430816,
+        "bytes": 11520,
+        "sha256": "c173d8317f50daf71093371a7f9dd38edbefa39f0bc50a7b2b0ce42883691bff"
+      },
+      {
+        "tensor": "blk.0.ffn_up_exps.weight",
+        "start": 2405874208,
+        "bytes": 4406400,
+        "sha256": "2861e8919d2658d23f6ad8099edd418e4ad272c3f4afd60971439a5791a8d9a8"
+      },
+      {
+        "tensor": "blk.0.ffn_up_exps.bias",
+        "start": 2404399648,
+        "bytes": 11520,
+        "sha256": "0373c6ad3369ac496494258fa16495df5ff4098e2e0c920feafece0b1e9013c9"
+      },
+      {
+        "tensor": "blk.0.ffn_down_exps.weight",
+        "start": 1273411616,
+        "bytes": 4406400,
+        "sha256": "bbf7df8f533850df15c6b8a8fb4e45ca6ba8612853c25cd7b359d59dace3aa31"
+      },
+      {
+        "tensor": "blk.0.ffn_down_exps.bias",
+        "start": 1271937056,
+        "bytes": 11520,
+        "sha256": "d905ffe90fab958bf54dabacdedc0446ef53bf8d444fb03cdb6236578afc6984"
+      }
+    ]
+  }
+}

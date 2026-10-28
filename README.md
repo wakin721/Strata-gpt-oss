@@ -1,3 +1,6 @@
+> **GPT-OSS experiment:** this development branch adds a native CPU expert probe,
+> not full GPT-OSS text generation. See [build instructions and measured results](experimental/gpt-oss/README.md).
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="apps/host/public/brand/strata-lockup-dark.svg">

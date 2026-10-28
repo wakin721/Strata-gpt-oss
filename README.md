@@ -1,5 +1,5 @@
-> **GPT-OSS experiment:** this development branch adds a native CPU expert probe,
-> not full GPT-OSS text generation. See [build instructions and measured results](experimental/gpt-oss/README.md).
+> **GPT-OSS experiment:** native token-ID decoding and CPU/GPU expert prototypes.
+> Full public-model chat deployment is not validated. See [build instructions and measured results](experimental/gpt-oss/README.md).
 
 <p align="center">
   <picture>

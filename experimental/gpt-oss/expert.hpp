@@ -6,7 +6,7 @@
 
 namespace strata::gpt_oss {
 
-enum class Format { F32, MXFP4 };
+enum class Format { F32, MXFP4, Q8_0, F16, BF16 };
 
 // Row-major weights; MXFP4 rows use the GGUF 32-values/17-bytes layout.
 struct Matrix {
@@ -19,6 +19,7 @@ struct Matrix {
 
 std::size_t row_bytes(std::size_t cols, Format format);
 void decode_row(const Matrix& weights, std::size_t row, std::span<float> output);
+void matvec(const Matrix& weights, std::span<const float> input, std::span<float> output);
 float swiglu(float gate, float up);
 
 struct Expert {

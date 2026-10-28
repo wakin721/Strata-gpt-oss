@@ -4,6 +4,16 @@
 #include <stdexcept>
 
 namespace strata::gpt_oss {
+inline Format tensor_format(std::uint32_t type) {
+    switch (type) {
+    case 0: return Format::F32;
+    case 1: return Format::F16;
+    case 8: return Format::Q8_0;
+    case 30: return Format::BF16;
+    case 39: return Format::MXFP4;
+    default: throw std::invalid_argument("GPT-OSS: unsupported GGUF tensor format " + std::to_string(type));
+    }
+}
 inline std::uint64_t meta_integer(const GgufFile& file, const std::string& name) {
     const auto* value = file.get(name);
     if (!value || (value->type != MetaType::U32 && value->type != MetaType::U64))
@@ -50,6 +60,21 @@ struct Loader {
         std::vector<float> values(static_cast<std::size_t>(rows));
         std::memcpy(values.data(), bytes.data() + expert * rows * sizeof(float), values.size() * sizeof(float));
         return values;
+    }
+    Matrix dense(const std::string& name, std::uint64_t cols, std::uint64_t rows) {
+        std::uint32_t type;
+        const auto bytes = tensor(name, {cols, rows}, type);
+        Matrix result{bytes, static_cast<std::size_t>(rows), static_cast<std::size_t>(cols), tensor_format(type)};
+        result.validate();
+        return result;
+    }
+    std::vector<float> vector(const std::string& name, std::uint64_t length) {
+        std::uint32_t type;
+        const auto bytes = tensor(name, {length}, type);
+        Matrix result{bytes, 1, static_cast<std::size_t>(length), tensor_format(type)};
+        std::vector<float> output(static_cast<std::size_t>(length));
+        decode_row(result, 0, output);
+        return output;
     }
 };
 

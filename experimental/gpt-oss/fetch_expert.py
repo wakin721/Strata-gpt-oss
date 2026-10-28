@@ -60,9 +60,10 @@ class Header:
             element, count = self.unpack("I"), self.unpack("Q")
             if count > 1 << 24:
                 raise ValueError("invalid GGUF array length")
-            # Tokens and merges are intentionally discarded.
-            for _ in range(count):
-                self.value(element, False)
+            # Preserve numeric patterns but do not retain large tokenizer arrays.
+            if keep and element not in (8,9):
+                return [self.value(element, False) for _ in range(count)]
+            for _ in range(count): self.value(element, False)
             return None
         formats = {0:"B",1:"b",2:"H",3:"h",4:"I",5:"i",6:"f",7:"?",10:"Q",11:"q",12:"d"}
         return self.unpack(formats[kind])
@@ -100,6 +101,11 @@ def write_fixture(path: Path, metadata: dict, tensors: list[tuple[str,list[int],
         header.extend(string(name))
         if isinstance(value,str):
             header.extend(struct.pack("<I",8)+string(value))
+        elif isinstance(value,float):
+            header.extend(struct.pack("<If",6,value))
+        elif isinstance(value,list):
+            header.extend(struct.pack("<IIQ",9,4,len(value)))
+            header.extend(struct.pack("<"+"I"*len(value),*value))
         else:
             header.extend(struct.pack("<II",4,value))
     payload=bytearray()

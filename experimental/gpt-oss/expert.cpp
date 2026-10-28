@@ -21,10 +21,35 @@ float dot(std::span<const float> a, std::span<const float> b) {
     for (std::size_t i = 0; i < a.size(); ++i) value += a[i] * b[i];
     return value;
 }
+float half_float(std::uint16_t value) {
+    const unsigned exponent = (value >> 10) & 31, fraction = value & 1023;
+    const float magnitude = exponent == 0 ? std::ldexp(static_cast<float>(fraction), -24)
+        : exponent == 31 ? (fraction ? std::numeric_limits<float>::quiet_NaN() : std::numeric_limits<float>::infinity())
+        : std::ldexp(1.f + static_cast<float>(fraction) / 1024.f, static_cast<int>(exponent) - 15);
+    return (value & 0x8000) ? -magnitude : magnitude;
+}
 void decode_unchecked(const Matrix& w, std::size_t row, std::span<float> output) {
     const auto* data = w.bytes.data() + row * row_bytes(w.cols, w.format);
     if (w.format == Format::F32) {
         std::memcpy(output.data(), data, w.cols * sizeof(float));
+        return;
+    }
+    if (w.format == Format::F16 || w.format == Format::BF16) {
+        for (std::size_t i = 0; i < w.cols; ++i) {
+            std::uint16_t value;
+            std::memcpy(&value, data + i * 2, 2);
+            output[i] = w.format == Format::F16 ? half_float(value) : std::bit_cast<float>(static_cast<std::uint32_t>(value) << 16);
+        }
+        return;
+    }
+    if (w.format == Format::Q8_0) {
+        for (std::size_t block = 0; block < w.cols / 32; ++block) {
+            std::uint16_t scale;
+            std::memcpy(&scale, data + block * 34, 2);
+            const float d = half_float(scale);
+            for (std::size_t j = 0; j < 32; ++j)
+                output[block * 32 + j] = d * static_cast<float>(static_cast<std::int8_t>(data[block * 34 + 2 + j]));
+        }
         return;
     }
     // OCP E2M1 values, doubled. The E8M0 scale below includes the factor 1/2.
@@ -45,9 +70,10 @@ void decode_unchecked(const Matrix& w, std::size_t row, std::span<float> output)
 
 std::size_t row_bytes(std::size_t cols, Format format) {
     if (format == Format::F32) return product(cols, sizeof(float));
-    require(format == Format::MXFP4, "GPT-OSS: unsupported matrix format");
-    require(cols % 32 == 0, "GPT-OSS: MXFP4 row width must be divisible by 32");
-    return product(cols / 32, 17);
+    if (format == Format::F16 || format == Format::BF16) return product(cols, 2);
+    require(format == Format::MXFP4 || format == Format::Q8_0, "GPT-OSS: unsupported matrix format");
+    require(cols % 32 == 0, "GPT-OSS: quantized row width must be divisible by 32");
+    return product(cols / 32, format == Format::MXFP4 ? 17 : 34);
 }
 void Matrix::validate() const {
     require(rows && cols, "GPT-OSS: empty matrix");
@@ -57,6 +83,15 @@ void decode_row(const Matrix& weights, std::size_t row, std::span<float> output)
     weights.validate();
     require(row < weights.rows && output.size() == weights.cols, "GPT-OSS: invalid row/output size");
     decode_unchecked(weights, row, output);
+}
+void matvec(const Matrix& weights, std::span<const float> input, std::span<float> output) {
+    weights.validate();
+    require(input.size() == weights.cols && output.size() == weights.rows, "GPT-OSS: matvec shape mismatch");
+    std::vector<float> row(weights.cols);
+    for (std::size_t i = 0; i < weights.rows; ++i) {
+        decode_unchecked(weights, i, row);
+        output[i] = dot(row, input);
+    }
 }
 float swiglu(float gate, float up) {
     const float g = (std::min)(gate, 7.0f);

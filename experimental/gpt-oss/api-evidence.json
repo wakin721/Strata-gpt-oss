@@ -1,0 +1,207 @@
+{
+  "date": "2026-10-29",
+  "baseline_source_commit": "75f2521",
+  "scope": "Opt-in experimental loopback chat-completions adapter; no production Strata server changes",
+  "interface": {
+    "bind": "127.0.0.1",
+    "default_port": 8097,
+    "model": "gpt-oss-120b-native",
+    "temperature": 0,
+    "default_context": 2048,
+    "max_context": 4096,
+    "single_flight": true,
+    "persistent_native_engine": false
+  },
+  "test_result": {
+    "ctest_suites_passed": 11,
+    "ctest_suites_failed": 0,
+    "ctest_log": "build-gpt-oss/api/ctest.log",
+    "http_integration_cases_passed": 6,
+    "http_final_log": "build-gpt-oss/api/http-final.log",
+    "covers": [
+      "multi-turn/text parts",
+      "buffered chat",
+      "SSE content before producer can exit",
+      "usage and finish reasons",
+      "stop across Unicode tokens",
+      "auth",
+      "CORS/preflight",
+      "invalid inputs/context/unsupported parameters",
+      "large native stderr without pipe deadlock",
+      "timeout",
+      "disconnect cancellation",
+      "busy rejection and slot reuse"
+    ],
+    "default_port_8097_bind_checked": true,
+    "batch_launcher_help_checked": true
+  },
+  "real_model_smoke": {
+    "model": "gpt-oss-120b-native",
+    "port": 9026,
+    "context": 128,
+    "cache_mib": 4096,
+    "group_hot_experts": true,
+    "health": {
+      "status": 200,
+      "body": {
+        "status": "ok",
+        "model": "gpt-oss-120b-native"
+      }
+    },
+    "models": {
+      "status": 200,
+      "body": {
+        "object": "list",
+        "data": [
+          {
+            "id": "gpt-oss-120b-native",
+            "object": "model",
+            "created": 0,
+            "owned_by": "local"
+          }
+        ]
+      }
+    },
+    "buffered": {
+      "seconds": 111.51924739999959,
+      "response": {
+        "id": "chatcmpl-0c1c3e76929647e68876edf871382b58",
+        "object": "chat.completion",
+        "created": 1793261183,
+        "model": "gpt-oss-120b-native",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "4."
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 92,
+          "completion_tokens": 3,
+          "total_tokens": 95
+        },
+        "timings": {
+          "execution": "native_cpu_gpu_experts",
+          "attention_device": "cpu",
+          "chat_supported": "false",
+          "vocab": "201088",
+          "predicted_token_ids": "19,13,200002",
+          "logit_records": "3",
+          "last_argmax": "200002",
+          "evaluated_positions": "94",
+          "cpu_kernels": "avx2",
+          "cpu_expert_workers": "4",
+          "prefill_seconds": "107.076",
+          "decode_seconds": "1.50641",
+          "first_token_seconds": "107.076",
+          "decode_evaluations": "2",
+          "decode_tokens_per_second": "1.32766",
+          "elapsed_seconds": "108.582",
+          "profile_attention_seconds": "8.63565",
+          "profile_expert_seconds": "99.2701",
+          "profile_head_seconds": "0.65537",
+          "gpu_expert_calls": "5818",
+          "cpu_expert_calls": "7718",
+          "expert_cache_bytes": "4294218240",
+          "gpu_expert_syncs": "2979",
+          "cache_admission_seconds": "2.3055",
+          "group_hot_experts": "1"
+        }
+      }
+    },
+    "stream": {
+      "seconds": 50.81880570000067,
+      "first_content_seconds": 47.686724200000754,
+      "text": "4.",
+      "events": [
+        {
+          "id": "chatcmpl-a34924ccf94349e8908b4d24d098e8df",
+          "object": "chat.completion.chunk",
+          "created": 1793261294,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "content": ""
+              },
+              "finish_reason": null
+            }
+          ]
+        },
+        {
+          "id": "chatcmpl-a34924ccf94349e8908b4d24d098e8df",
+          "object": "chat.completion.chunk",
+          "created": 1793261294,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "content": "4"
+              },
+              "finish_reason": null
+            }
+          ]
+        },
+        {
+          "id": "chatcmpl-a34924ccf94349e8908b4d24d098e8df",
+          "object": "chat.completion.chunk",
+          "created": 1793261294,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "content": "."
+              },
+              "finish_reason": null
+            }
+          ]
+        },
+        {
+          "id": "chatcmpl-a34924ccf94349e8908b4d24d098e8df",
+          "object": "chat.completion.chunk",
+          "created": 1793261294,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {},
+              "finish_reason": "stop"
+            }
+          ]
+        },
+        {
+          "id": "chatcmpl-a34924ccf94349e8908b4d24d098e8df",
+          "object": "chat.completion.chunk",
+          "created": 1793261294,
+          "model": "gpt-oss-120b-native",
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 92,
+            "completion_tokens": 3,
+            "total_tokens": 95
+          }
+        }
+      ],
+      "done": true
+    }
+  },
+  "transport_note": "Raw real-model smoke was captured before the final optional timings metadata whitelist; final numeric timing formatting was checked by the HTTP integration test. Content, usage and SSE schemas are unchanged.",
+  "limitations": [
+    "Native model remains an experimental backend with a documented failed Chinese writing-quality diagnostic",
+    "Only greedy text chat is exposed; unsupported explicit sampling/features return 400",
+    "Native process/expert cache/KV restart per request; only Python/template/tokenizer stay resident",
+    "Single runs with uncontrolled file-cache state, no throughput claim",
+    "Actual desktop/SillyTavern UI setup was not exercised; HTTP/SSE transport was tested directly",
+    "Temporary real-model listener was closed after smoke tests; launch start_api.bat to serve on 8097"
+  ],
+  "model_sha256": "582bd40f6886200101f4c4ed9f25f3fe80cc14c86e9e2b37746cd8904a0c622d",
+  "engine_sha256": "17dc17b6f7317678ef6574754119d0a21d8193bddff0f106c473e5626bd48495"
+}

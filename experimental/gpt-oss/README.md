@@ -7,10 +7,13 @@ It does not launch llama-server or Ollama.
 **It is not a production GPT-OSS chat deployment.** The full downloaded 120B model
 now completes short native forward passes and a template-based arithmetic text
 probe. A Python wrapper renders the GGUF's own Harmony template and handles text
-encoding/decoding. Broad output quality, long-context full-model parity, service
-integration and sustained throughput remain unvalidated. Short local speed
+encoding/decoding. Broad output quality, long-context full-model parity,
+long-running service behavior and sustained throughput remain unvalidated. Short local speed
 comparisons are recorded below. It is not in the model catalog
 and is never selected by the released engine.
+
+An opt-in local chat-completions API adapter is available below. It exposes
+the experimental backend and retains the documented writing-quality limitations.
 
 The normal build path is unchanged when `STRATA_GPT_OSS_PROTOTYPE_ONLY` is OFF
 (the default). With it ON, CMake builds only these prototypes and their optional tests.
@@ -81,8 +84,8 @@ The default explicitly requests the final channel; `--thinking` allows analysis
 before final but may need a larger token budget. Generation stops at the model's
 terminal token IDs. This is a diagnostic command: input processing is currently
 sequential and can take minutes. Output is displayed after generation unless
-`--stream` is selected. It has no conversation loop, tool execution, HTTP streaming
-API or background service.
+`--stream` is selected. This command has no conversation loop or tool execution.
+The separate API adapter below accepts client-supplied chat history and supports SSE.
 An optional `--output FILE.json` saves the explicit prompt's test result locally.
 
 ## Stream final-channel text
@@ -120,6 +123,79 @@ First text can lag first token when a UTF-8 character spans several tokens.
 
 Streaming improves display latency after prefill. It does not reduce the compute
 needed before the first token, or imply a higher inference throughput.
+
+## Local chat API
+
+Start from the source checkout, using the existing downloaded model and build:
+
+On Windows, double-click `experimental\gpt-oss\start_api.bat`, or use PowerShell:
+
+```powershell
+.\experimental\gpt-oss\start_api.ps1
+```
+
+The launcher runs in the foreground. Ctrl+C stops the server and active native
+request. The default port is 8097, separate from released Strata's usual port.
+`-Port`, `-Context`, `-ExpertCacheMiB`, `-CpuExpertWorkers`, and
+`-GroupHotExperts` customize the launcher; `python experimental/gpt-oss/api_server.py
+--help` lists the remaining options.
+
+For a client that supports an OpenAI-compatible chat-completions endpoint:
+
+| Setting | Value |
+| --- | --- |
+| Base URL | `http://127.0.0.1:8097/v1` |
+| Model | `gpt-oss-120b-native` |
+| API key | Not required by default; use `local` if the client requires a value |
+| Temperature | **0** |
+| Top-p / penalties | Top-p 1, frequency/presence penalties 0 |
+| Streaming | Enabled (`stream: true`) |
+
+The adapter has `GET /health`, `GET /v1/models`, and
+`POST /v1/chat/completions`. It accepts text-only system/developer/user/assistant
+history, `max_tokens` or `max_completion_tokens`, up to four stop strings,
+ordinary JSON responses, and SSE `chat.completion.chunk` events ending in
+`[DONE]`. `stream_options.include_usage` requests a final usage event. Native
+token bytes use the same incremental UTF-8/final-message decoder as the terminal.
+
+The native decoder currently samples greedily. Explicit requests for other
+temperatures, nontrivial sampling filters/penalties, tools, images, logprobs or
+structured output return 400 instead of silently ignoring those features.
+Only one native request runs at a time; concurrent requests receive 429.
+Context defaults to 2048 and is capped at 4096 in this adapter. Prompt plus
+requested output must fit that context; the API validates this before inference.
+
+For a simple buffered request in PowerShell:
+
+```powershell
+$chat = @{
+    model = 'gpt-oss-120b-native'
+    messages = @(@{role='user'; content='2+2?'})
+    temperature = 0
+    max_tokens = 8
+} | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Uri 'http://127.0.0.1:8097/v1/chat/completions' -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($chat))
+```
+
+Binding is loopback-only. Local browser origins (`localhost`, `127.0.0.1`, `::1`)
+have CORS/preflight support. Optional `-ApiKeyEnv GPT_OSS_API_KEY` reads a bearer
+key from that environment variable without printing or storing it. When selected,
+use the same key in the client. HTTP requests do not log prompt/response bodies.
+
+The HTTP process, template and tokenizer remain loaded. Each generation starts
+a fresh native process, so expert-cache contents and KV state are not reused
+between API calls. The client must send the conversation history. Long prefill
+can still take minutes. SSE sends an immediate assistant-role event and periodic
+comments while waiting, then content deltas when text becomes available; the
+role event is not a model first-token timing. A disconnected streaming client or
+request timeout cancels its child process. The API defaults to a 900 s timeout.
+
+Six HTTP integration tests cover buffered/SSE output, a handshake proving text
+arrives before generation completes, UTF-8 stop strings, length limits, usage,
+auth, local-browser CORS, malformed/unsupported requests, engine failure, timeout, disconnect and
+single-flight release. Real 120B arithmetic API smoke results are recorded in
+`api-evidence.json`. This is basic text-chat compatibility, not the complete
+released Strata API or a claim that Chinese writing quality is fixed.
 
 ## Further optimization checks on 2026-10-29
 
@@ -178,8 +254,8 @@ Ten suites pass, including grouped GPU/CPU parity, token events/EOS, Unicode and
 Harmony decoding, and a pipe handshake that prevents a test producer from
 finishing until the consumer has displayed text. Raw local results and scope
 are recorded in `stream-evidence.json`. The Chinese diagnostic is retained as a
-failed writing-quality check. These checks cover terminal streaming;
-an HTTP/SSE API would be a separate service layer.
+failed writing-quality check. These measurements cover terminal streaming;
+the local HTTP/SSE adapter is described separately above.
 The corrected 97-token Chinese diagnostic generated 36 tokens including its
 message-end token: 35 decode evaluations took 25.92 s (1.35 tokens/s), with
 77.15 s engine time to the first token. The earlier 48-token diagnostic measured
@@ -402,7 +478,7 @@ separate 2026-10-29 speed comparisons above cover only the listed workloads.
    projections/attention, batched prefill and KV placement. Measure cache eviction and long runs.
 3. Compare real throughput/memory with a same-hardware optimized baseline before
    claiming a speed improvement or enabling a model catalog entry.
-4. Extend the one-shot Harmony wrapper to validated streaming and API handling. Choose speculation separately;
+4. Extend the local chat API with a persistent native worker and validated sampling. Choose speculation separately;
    Qwen's embedded MTP head cannot be reused for GPT-OSS.
 
 The existing `model_family_runs` guard intentionally still rejects GPT-OSS.

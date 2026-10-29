@@ -20,6 +20,7 @@ from template_text import compile_template
 from monitoring import Monitor
 from chat_protocol import LEVELS,prepare_tools,prepare_messages,reasoning
 from harmony import HarmonyAnswer
+from persistent import PersistentWorker,PersistentRun,PersistentTimeout
 
 MODEL_ID='gpt-oss-120b-native'
 
@@ -59,6 +60,7 @@ class Plan:
     header:str='assistant'
     validators:dict=None
     expose_reasoning:bool=True
+    cache_prompt:bool=True
 
 
 def integer(value,name,low,high):
@@ -124,7 +126,7 @@ class NativeBackend:
     def __init__(self,args,engine_command=None):
         from fetch_expert import Header
         from tokenizers import Tokenizer
-        self.args=args;self.gate=threading.Lock();self.active=None
+        self.args=args;self.gate=threading.Lock();self.active=None;self.worker=None
         self.scratch_dir=Path(getattr(args,'scratch_dir',Path(__file__).resolve().parents[2]/'build-gpt-oss-api-temp'))
         self.scratch_dir.mkdir(parents=True,exist_ok=True)
         self.engine_command=engine_command or [str(args.engine.resolve())]
@@ -163,6 +165,8 @@ class NativeBackend:
         if body.get('response_format') not in (None,{'type':'text'}): raise RequestError('only response_format type=text is supported')
         stream=body.get('stream',False)
         if type(stream) is not bool: raise RequestError('stream must be a boolean')
+        cache_prompt=body.get('cache_prompt',True)
+        if type(cache_prompt) is not bool: raise RequestError('cache_prompt must be a boolean')
         options=body.get('stream_options',{})
         if options is None: options={}
         if not isinstance(options,dict) or type(options.get('include_usage',False)) is not bool: raise RequestError('invalid stream_options')
@@ -186,12 +190,29 @@ class NativeBackend:
         except Exception as error: raise RequestError(f'invalid chat template input: {error}') from error
         if not ids or len(ids)+predict-1>self.args.context:
             raise RequestError(f'prompt ({len(ids)} tokens) and output ({predict}) exceed context {self.args.context}')
-        return Plan(ids,predict,stream,stops,options.get('include_usage',False),natural,'assistant'+prefix,validators,effort!='none')
+        return Plan(ids,predict,stream,stops,options.get('include_usage',False),natural,'assistant'+prefix,validators,effort!='none',cache_prompt)
     @contextmanager
     def run(self,plan):
         a=self.args
         token_path=None;run=None
         try:
+            if getattr(a,'persistent_engine',False):
+                markers=['<|return|>','<|endoftext|>','<|call|>']+([] if plan.harmony else ['<|end|>'])
+                eos_ids=[self.tokenizer.token_to_id(marker) for marker in markers]
+                if any(token is None for token in eos_ids): raise EngineError('tokenizer is missing native EOS markers')
+                if self.worker and (self.worker.closed or self.worker.process.poll() is not None):
+                    self.worker.close();self.worker=None
+                if self.worker is None:
+                    command=[*self.engine_command,'--serve','--model',str(a.model.resolve()),'--context',str(a.context)]
+                    if not a.scalar: command+=['--fast-cpu']
+                    if a.expert_ptx:
+                        command+=['--expert-ptx',str(a.expert_ptx.resolve()),'--expert-cache-mib',str(a.expert_cache_mib),
+                            '--cpu-expert-workers',str(a.cpu_expert_workers)]
+                        if a.group_hot_experts: command+=['--group-hot-experts']
+                    self.worker=PersistentWorker(command,self.scratch_dir)
+                run=PersistentRun(self.worker,plan,a.request_timeout,eos_ids);self.active=run
+                yield run
+                return
             # Windows command lines cannot hold a long token list. Close the
             # temporary file before the native process opens it, then delete it
             # after the process exits (including cancellation/startup failure).
@@ -218,6 +239,7 @@ class NativeBackend:
     def cancel(self):
         run=self.active
         if run: run.cancel()
+        if self.worker: self.worker.close();self.worker=None
 
 
 class Server(ThreadingHTTPServer):
@@ -228,6 +250,7 @@ class Server(ThreadingHTTPServer):
         super().__init__(address,Handler)
     def server_close(self):
         super().server_close()
+        self.backend.cancel()
         self.monitor.close()
 
 
@@ -328,6 +351,8 @@ class Handler(BaseHTTPRequestHandler):
                         if plan.stream and time.monotonic()-heartbeat>=5:
                             self.wfile.write(b': waiting\n\n');self.wfile.flush();heartbeat=time.monotonic()
                         continue
+                    if event.get('event')=='prefill':
+                        self.server.monitor.progress(event);continue
                     if event['id']<0 or event['id']>=backend.vocab: raise EngineError('native token outside tokenizer vocabulary')
                     self.server.monitor.token(event)
                     if plan.harmony:
@@ -350,6 +375,8 @@ class Handler(BaseHTTPRequestHandler):
                 if plan.harmony and renderer.called: finish='tool_calls'
                 outcome=finish
                 usage={'prompt_tokens':len(plan.ids),'completion_tokens':len(run.ids),'total_tokens':len(plan.ids)+len(run.ids)}
+                if getattr(backend.args,'persistent_engine',False):
+                    usage['prompt_tokens_details']={'cached_tokens':int(run.fields.get('prompt_reused_tokens','0'))}
                 if plan.stream:
                     self._sse(chunk({},finish))
                     if plan.include_usage:
@@ -368,7 +395,7 @@ class Handler(BaseHTTPRequestHandler):
                         'usage':usage,'timings':timings})
         except (ConnectionError,TimeoutError): outcome='disconnect'
         except Exception as error:
-            outcome='timeout' if isinstance(error,(EngineTimeout,subprocess.TimeoutExpired)) else 'error'
+            outcome='timeout' if isinstance(error,(EngineTimeout,PersistentTimeout,subprocess.TimeoutExpired)) else 'error'
             try:
                 if streaming_started:
                     self._sse({'error':{'message':str(error),'type':'server_error'}});self._sse('[DONE]')
@@ -394,6 +421,7 @@ def main():
     parser.add_argument('--request-timeout',type=float,default=900)
     parser.add_argument('--scratch-dir',type=Path,default=root/'build-gpt-oss-api-temp')
     parser.add_argument('--group-hot-experts',action='store_true')
+    parser.add_argument('--persistent-engine',action='store_true',help='Keep the native engine and reuse exact prompt-prefix KV checkpoints')
     parser.add_argument('--cpu-only',action='store_true')
     parser.add_argument('--scalar',action='store_true')
     auth=parser.add_mutually_exclusive_group()

@@ -1,0 +1,707 @@
+{
+  "date": "2026-10-29",
+  "baseline_source_commit": "b0fddad",
+  "scope": "Opt-in persistent native GPT-OSS worker, bounded exact-prefix KV checkpoints and prefill telemetry; no released backend changes",
+  "validation": {
+    "full_ctest_suites_passed": 15,
+    "full_ctest_suites_failed": 0,
+    "final_http_ctest_suites_passed": 2,
+    "http_cases": {
+      "one_shot": 15,
+      "persistent": 5
+    },
+    "native_prefix_tests": [
+      "Full logits against independent NumPy after ring overwrite, context growth and branch restore.",
+      "Native greedy tokens against NumPy for repeated, appended, divergent, bypassed, long and invalid requests; CPU and grouped GPU modes."
+    ],
+    "logs": {
+      "full_ctest": "build-gpt-oss/api/persistent/ctest-final.log",
+      "final_http": "build-gpt-oss/api/persistent/http-final.log",
+      "final_persistent_http": "build-gpt-oss/api/persistent/http-persistent-final.log"
+    },
+    "worker_failure_checks": [
+      "timeout before readiness",
+      "native failure with large stderr",
+      "mismatched request id",
+      "invalid progress/summary/timing",
+      "write pipe failure",
+      "idle worker crash",
+      "SSE disconnect",
+      "text stop and next-request recovery",
+      "shutdown"
+    ]
+  },
+  "initial_real_model_probe": {
+    "date": "2026-10-29",
+    "baseline_source_commit": "b0fddad",
+    "engine_sha256": "b3ce519e6cd20dfe5b7c02d4742b00e8c9f7b398c208b65fc91d615cb0c85f24",
+    "cache_mib": 8192,
+    "group_hot_experts": true,
+    "workers": 4,
+    "context": 2048,
+    "cases": [
+      {
+        "name": "persistent_first",
+        "persistent": true,
+        "request": {
+          "model": "gpt-oss-120b-native",
+          "temperature": 0,
+          "max_tokens": 12,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are ChatGPT. Answer with just the number."
+            },
+            {
+              "role": "user",
+              "content": "2+2?"
+            }
+          ]
+        },
+        "status": 200,
+        "wall_seconds": 65.82796679999592,
+        "response": {
+          "id": "chatcmpl-101e3596715c",
+          "object": "chat.completion",
+          "created": 1793273818,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "4."
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 92,
+            "completion_tokens": 3,
+            "total_tokens": 95,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "prefill_seconds": 64.21,
+            "first_token_seconds": 64.21,
+            "decode_seconds": 1.30479,
+            "elapsed_seconds": 65.5148,
+            "decode_tokens_per_second": 1.53282
+          }
+        },
+        "native_fields": {
+          "prefill_seconds": "64.21",
+          "first_token_seconds": "64.21",
+          "decode_seconds": "1.30479",
+          "elapsed_seconds": "65.5148",
+          "decode_tokens_per_second": "1.53282",
+          "prompt_reused_tokens": "0",
+          "prompt_evaluated_tokens": "92",
+          "kv_payload_bytes": "15187968",
+          "checkpoint_bytes": "22781952",
+          "checkpoints": "3",
+          "profile_attention_seconds": "6.11864",
+          "profile_expert_seconds": "58.841",
+          "profile_head_seconds": "0.529086",
+          "gpu_expert_calls": "7830",
+          "cpu_expert_calls": "5706",
+          "gpu_expert_syncs": "3201",
+          "cache_admission_seconds": "2.97962",
+          "expert_cache_bytes": "8588436480"
+        },
+        "idle_status": {
+          "service": "strata",
+          "backend": "gpt-oss-native",
+          "model": "gpt-oss-120b-native",
+          "started": 1793273818.6073546,
+          "loaded": true,
+          "persistent_engine": true,
+          "cache_max_tokens": 2048,
+          "busy": false,
+          "generated": 0,
+          "concurrency": {
+            "serving": 1,
+            "requested": 1,
+            "active": 0,
+            "queued": 0
+          }
+        }
+      },
+      {
+        "name": "persistent_repeat",
+        "persistent": true,
+        "request": {
+          "model": "gpt-oss-120b-native",
+          "temperature": 0,
+          "max_tokens": 12,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are ChatGPT. Answer with just the number."
+            },
+            {
+              "role": "user",
+              "content": "2+2?"
+            }
+          ]
+        },
+        "status": 200,
+        "wall_seconds": 1.4733829000033438,
+        "response": {
+          "id": "chatcmpl-9f96ce65f73c",
+          "object": "chat.completion",
+          "created": 1793273884,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "4."
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 92,
+            "completion_tokens": 3,
+            "total_tokens": 95,
+            "prompt_tokens_details": {
+              "cached_tokens": 91
+            }
+          },
+          "timings": {
+            "prefill_seconds": 0.40526,
+            "first_token_seconds": 0.40526,
+            "decode_seconds": 0.763236,
+            "elapsed_seconds": 1.1685,
+            "decode_tokens_per_second": 2.62042
+          }
+        },
+        "native_fields": {
+          "prefill_seconds": "0.40526",
+          "first_token_seconds": "0.40526",
+          "decode_seconds": "0.763236",
+          "elapsed_seconds": "1.1685",
+          "decode_tokens_per_second": "2.62042",
+          "prompt_reused_tokens": "91",
+          "prompt_evaluated_tokens": "1",
+          "kv_payload_bytes": "15187968",
+          "checkpoint_bytes": "22781952",
+          "checkpoints": "3",
+          "profile_attention_seconds": "0.229258",
+          "profile_expert_seconds": "0.854252",
+          "profile_head_seconds": "0.0799092",
+          "gpu_expert_calls": "313",
+          "cpu_expert_calls": "119",
+          "gpu_expert_syncs": "108",
+          "cache_admission_seconds": "0.0610309",
+          "expert_cache_bytes": "8588436480"
+        },
+        "idle_status": {
+          "service": "strata",
+          "backend": "gpt-oss-native",
+          "model": "gpt-oss-120b-native",
+          "started": 1793273818.6073546,
+          "loaded": true,
+          "persistent_engine": true,
+          "cache_max_tokens": 2048,
+          "busy": false,
+          "generated": 0,
+          "concurrency": {
+            "serving": 1,
+            "requested": 1,
+            "active": 0,
+            "queued": 0
+          }
+        }
+      },
+      {
+        "name": "persistent_append",
+        "persistent": true,
+        "request": {
+          "model": "gpt-oss-120b-native",
+          "temperature": 0,
+          "max_tokens": 12,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are ChatGPT. Answer with just the number."
+            },
+            {
+              "role": "user",
+              "content": "2+2?"
+            },
+            {
+              "role": "assistant",
+              "content": "4."
+            },
+            {
+              "role": "user",
+              "content": "3+3?"
+            }
+          ]
+        },
+        "status": 200,
+        "wall_seconds": 17.584084599999187,
+        "response": {
+          "id": "chatcmpl-f595ee8bb6b7",
+          "object": "chat.completion",
+          "created": 1793273885,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "1\n\nThe user asks \"3+3?\" expecting answer"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 108,
+            "completion_tokens": 12,
+            "total_tokens": 120,
+            "prompt_tokens_details": {
+              "cached_tokens": 94
+            }
+          },
+          "timings": {
+            "prefill_seconds": 6.57853,
+            "first_token_seconds": 6.57853,
+            "decode_seconds": 10.7546,
+            "elapsed_seconds": 17.3331,
+            "decode_tokens_per_second": 1.02282
+          }
+        },
+        "native_fields": {
+          "prefill_seconds": "6.57853",
+          "first_token_seconds": "6.57853",
+          "decode_seconds": "10.7546",
+          "elapsed_seconds": "17.3331",
+          "decode_tokens_per_second": "1.02282",
+          "prompt_reused_tokens": "94",
+          "prompt_evaluated_tokens": "14",
+          "kv_payload_bytes": "17547264",
+          "checkpoint_bytes": "49102848",
+          "checkpoints": "6",
+          "profile_attention_seconds": "1.8807",
+          "profile_expert_seconds": "15.1373",
+          "profile_head_seconds": "0.302464",
+          "gpu_expert_calls": "2087",
+          "cpu_expert_calls": "1513",
+          "gpu_expert_syncs": "831",
+          "cache_admission_seconds": "0.29137",
+          "expert_cache_bytes": "8588436480"
+        },
+        "idle_status": {
+          "service": "strata",
+          "backend": "gpt-oss-native",
+          "model": "gpt-oss-120b-native",
+          "started": 1793273818.6073546,
+          "loaded": true,
+          "persistent_engine": true,
+          "cache_max_tokens": 2048,
+          "busy": false,
+          "generated": 0,
+          "concurrency": {
+            "serving": 1,
+            "requested": 1,
+            "active": 0,
+            "queued": 0
+          }
+        }
+      },
+      {
+        "name": "one_shot_same_prompt",
+        "persistent": false,
+        "request": {
+          "model": "gpt-oss-120b-native",
+          "temperature": 0,
+          "max_tokens": 12,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are ChatGPT. Answer with just the number."
+            },
+            {
+              "role": "user",
+              "content": "2+2?"
+            }
+          ]
+        },
+        "status": 200,
+        "wall_seconds": 43.74300719999883,
+        "response": {
+          "id": "chatcmpl-48f6dcac437f",
+          "object": "chat.completion",
+          "created": 1793273905,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "4."
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 92,
+            "completion_tokens": 3,
+            "total_tokens": 95
+          },
+          "timings": {
+            "prefill_seconds": 41.6243,
+            "first_token_seconds": 41.6243,
+            "decode_seconds": 0.862621,
+            "elapsed_seconds": 42.4869,
+            "decode_tokens_per_second": 2.31852
+          }
+        },
+        "native_fields": null,
+        "idle_status": {
+          "service": "strata",
+          "backend": "gpt-oss-native",
+          "model": "gpt-oss-120b-native",
+          "started": 1793273818.6073546,
+          "loaded": false,
+          "persistent_engine": false,
+          "cache_max_tokens": 2048,
+          "busy": false,
+          "generated": 0,
+          "concurrency": {
+            "serving": 1,
+            "requested": 1,
+            "active": 0,
+            "queued": 0
+          }
+        }
+      }
+    ],
+    "repeat_matches_one_shot": true
+  },
+  "final_real_model_quality_comparison": {
+    "date": "2026-10-29",
+    "baseline_source_commit": "b0fddad",
+    "engine_sha256": "e5082a3cb53f088fa93deffeff903cf574a944a469fe3bf19bb3c46bf783eb98",
+    "cache_mib": 8192,
+    "group_hot_experts": true,
+    "workers": 4,
+    "context": 2048,
+    "cases": [
+      {
+        "name": "append_fresh_worker",
+        "persistent": true,
+        "request": {
+          "model": "gpt-oss-120b-native",
+          "temperature": 0,
+          "max_tokens": 12,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are ChatGPT. Answer with just the number."
+            },
+            {
+              "role": "user",
+              "content": "2+2?"
+            },
+            {
+              "role": "assistant",
+              "content": "4."
+            },
+            {
+              "role": "user",
+              "content": "3+3?"
+            }
+          ]
+        },
+        "status": 200,
+        "wall_seconds": 53.603879499998584,
+        "response": {
+          "id": "chatcmpl-4e947f6b38c4",
+          "object": "chat.completion",
+          "created": 1793274223,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "1\n\nThe user asks \"3+3?\" expecting answer"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 108,
+            "completion_tokens": 12,
+            "total_tokens": 120,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "prefill_seconds": 47.9341,
+            "first_token_seconds": 47.9341,
+            "decode_seconds": 5.38216,
+            "elapsed_seconds": 53.3163,
+            "decode_tokens_per_second": 2.04379
+          }
+        },
+        "native_fields": {
+          "prefill_seconds": "47.9341",
+          "first_token_seconds": "47.9341",
+          "decode_seconds": "5.38216",
+          "elapsed_seconds": "53.3163",
+          "decode_tokens_per_second": "2.04379",
+          "prompt_reused_tokens": "0",
+          "prompt_evaluated_tokens": "108",
+          "kv_payload_bytes": "17547264",
+          "checkpoint_bytes": "26320896",
+          "checkpoints": "3",
+          "profile_attention_seconds": "7.99726",
+          "profile_expert_seconds": "44.8137",
+          "profile_head_seconds": "0.488147",
+          "gpu_expert_calls": "9907",
+          "cpu_expert_calls": "7229",
+          "gpu_expert_syncs": "4032",
+          "cache_admission_seconds": "3.14413",
+          "expert_cache_bytes": "8588436480"
+        },
+        "idle_status": {
+          "service": "strata",
+          "backend": "gpt-oss-native",
+          "model": "gpt-oss-120b-native",
+          "started": 1793274223.8300998,
+          "loaded": true,
+          "persistent_engine": true,
+          "cache_max_tokens": 2048,
+          "busy": false,
+          "generated": 0,
+          "concurrency": {
+            "serving": 1,
+            "requested": 1,
+            "active": 0,
+            "queued": 0
+          }
+        }
+      },
+      {
+        "name": "append_reused_prefix",
+        "persistent": true,
+        "request": {
+          "model": "gpt-oss-120b-native",
+          "temperature": 0,
+          "max_tokens": 12,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are ChatGPT. Answer with just the number."
+            },
+            {
+              "role": "user",
+              "content": "2+2?"
+            },
+            {
+              "role": "assistant",
+              "content": "4."
+            },
+            {
+              "role": "user",
+              "content": "3+3?"
+            }
+          ]
+        },
+        "status": 200,
+        "wall_seconds": 5.254272500002116,
+        "response": {
+          "id": "chatcmpl-26e42d9cc370",
+          "object": "chat.completion",
+          "created": 1793274277,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "1\n\nThe user asks \"3+3?\" expecting answer"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 108,
+            "completion_tokens": 12,
+            "total_tokens": 120,
+            "prompt_tokens_details": {
+              "cached_tokens": 107
+            }
+          },
+          "timings": {
+            "prefill_seconds": 0.400388,
+            "first_token_seconds": 0.400401,
+            "decode_seconds": 4.58188,
+            "elapsed_seconds": 4.98227,
+            "decode_tokens_per_second": 2.40076
+          }
+        },
+        "native_fields": {
+          "prefill_seconds": "0.400388",
+          "first_token_seconds": "0.400401",
+          "decode_seconds": "4.58188",
+          "elapsed_seconds": "4.98227",
+          "decode_tokens_per_second": "2.40076",
+          "prompt_reused_tokens": "107",
+          "prompt_evaluated_tokens": "1",
+          "kv_payload_bytes": "17547264",
+          "checkpoint_bytes": "26320896",
+          "checkpoints": "3",
+          "profile_attention_seconds": "0.932437",
+          "profile_expert_seconds": "3.72918",
+          "profile_head_seconds": "0.314057",
+          "gpu_expert_calls": "903",
+          "cpu_expert_calls": "825",
+          "gpu_expert_syncs": "390",
+          "cache_admission_seconds": "0.11623",
+          "expert_cache_bytes": "8588436480"
+        },
+        "idle_status": {
+          "service": "strata",
+          "backend": "gpt-oss-native",
+          "model": "gpt-oss-120b-native",
+          "started": 1793274223.8300998,
+          "loaded": true,
+          "persistent_engine": true,
+          "cache_max_tokens": 2048,
+          "busy": false,
+          "generated": 0,
+          "concurrency": {
+            "serving": 1,
+            "requested": 1,
+            "active": 0,
+            "queued": 0
+          }
+        }
+      },
+      {
+        "name": "append_recompute_warm_worker",
+        "persistent": true,
+        "request": {
+          "model": "gpt-oss-120b-native",
+          "temperature": 0,
+          "max_tokens": 12,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are ChatGPT. Answer with just the number."
+            },
+            {
+              "role": "user",
+              "content": "2+2?"
+            },
+            {
+              "role": "assistant",
+              "content": "4."
+            },
+            {
+              "role": "user",
+              "content": "3+3?"
+            }
+          ],
+          "cache_prompt": false
+        },
+        "status": 200,
+        "wall_seconds": 46.93911300000036,
+        "response": {
+          "id": "chatcmpl-343643662a03",
+          "object": "chat.completion",
+          "created": 1793274282,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "1\n\nThe user asks \"3+3?\" expecting answer"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 108,
+            "completion_tokens": 12,
+            "total_tokens": 120,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "prefill_seconds": 41.0453,
+            "first_token_seconds": 41.0453,
+            "decode_seconds": 5.63717,
+            "elapsed_seconds": 46.6825,
+            "decode_tokens_per_second": 1.95133
+          }
+        },
+        "native_fields": {
+          "prefill_seconds": "41.0453",
+          "first_token_seconds": "41.0453",
+          "decode_seconds": "5.63717",
+          "elapsed_seconds": "46.6825",
+          "decode_tokens_per_second": "1.95133",
+          "prompt_reused_tokens": "0",
+          "prompt_evaluated_tokens": "108",
+          "kv_payload_bytes": "17547264",
+          "checkpoint_bytes": "26320896",
+          "checkpoints": "3",
+          "profile_attention_seconds": "7.58331",
+          "profile_expert_seconds": "38.6284",
+          "profile_head_seconds": "0.454913",
+          "gpu_expert_calls": "11166",
+          "cpu_expert_calls": "5970",
+          "gpu_expert_syncs": "4157",
+          "cache_admission_seconds": "0.880511",
+          "expert_cache_bytes": "8588436480"
+        },
+        "idle_status": {
+          "service": "strata",
+          "backend": "gpt-oss-native",
+          "model": "gpt-oss-120b-native",
+          "started": 1793274223.8300998,
+          "loaded": true,
+          "persistent_engine": true,
+          "cache_max_tokens": 2048,
+          "busy": false,
+          "generated": 0,
+          "concurrency": {
+            "serving": 1,
+            "requested": 1,
+            "active": 0,
+            "queued": 0
+          }
+        }
+      }
+    ],
+    "all_three_messages_match": true,
+    "matches_original_appended_response": true
+  },
+  "limits": [
+    "First unseen input still uses token-by-token prefill; this does not implement batched prefill or GPU attention/dense projections.",
+    "The same 92-token arithmetic input returned 4. in persistent first/repeat and one-shot modes. The repeat reused 91 tokens.",
+    "The 108-token continuation returned incorrect/incomplete text in all tested modes, including a fresh worker and forced full recomputation. This is retained as a quality failure.",
+    "First-input/file-cache state, memory pressure and expert placement were uncontrolled. Do not generalize this short-prefix timing to 7.8k or 128k prompts.",
+    "Real-model probes used buffered HTTP. Incremental SSE and cancellation/recovery are exercised by fake-worker integration tests.",
+    "One active history and at most eight sliding checkpoints; idle RAM/VRAM remain allocated. Abort/failure discards the worker.",
+    "The initial timing probe preceded the addition of per-request cache bypass and precise first-token timing; the final comparison records the updated native executable hash."
+  ],
+  "installed_engine": {
+    "path": "E:\\Files\\Codex_Files\\Qwen3.8f\\strata-gpt-oss\\build-gpt-oss-ninja\\experimental\\gpt-oss\\strata-gpt-oss-cpu.exe",
+    "sha256": "e5082a3cb53f088fa93deffeff903cf574a944a469fe3bf19bb3c46bf783eb98",
+    "previous_binary_backup": "build-gpt-oss/api/persistent/baseline-cpu-b0fddad.exe"
+  }
+}

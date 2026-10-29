@@ -238,5 +238,38 @@ std::vector<float> Decoder::forward(std::size_t token,const BlockObserver& obser
         return logits;
     } catch(...) { reset(); throw; }
 }
-void Decoder::reset() { position_=0; for(auto& cache:caches_) cache.reset(); }
+void Decoder::reset() { position_=0; ++epoch_; for(auto& cache:caches_) cache.reset(); }
+void Decoder::reserve_context(std::size_t needed) {
+    require(needed>0 && needed<=config.context,"GPT-OSS: requested context is outside model limits");
+    if(needed<=max_context_) return;
+    // A sliding cache smaller than its window has never wrapped: growing it
+    // preserves its row indices. Once full-sized its ring geometry is fixed.
+    for(std::size_t i=0;i<caches_.size();++i) {
+        auto& cache=caches_[i];
+        const auto cap=config.sliding[i] ? (std::min)(config.window,needed) : needed;
+        require(cap<=std::numeric_limits<std::size_t>::max()/cache.width,"GPT-OSS: KV capacity overflow");
+        cache.keys.resize(cap*cache.width);cache.values.resize(cap*cache.width);cache.capacity=cap;
+    }
+    max_context_=needed;
+}
+DecoderCheckpoint Decoder::checkpoint() const {
+    DecoderCheckpoint result{position_,epoch_,{}};
+    for(std::size_t i=0;i<caches_.size();++i) if(config.sliding[i]) {
+        const auto& cache=caches_[i];
+        result.sliding.push_back({i,cache.keys,cache.values});
+    }
+    return result;
+}
+void Decoder::restore(const DecoderCheckpoint& saved) {
+    require(saved.epoch==epoch_ && saved.position<=position_,"GPT-OSS: expired KV checkpoint");
+    for(const auto& part:saved.sliding) {
+        require(part.layer<caches_.size() && config.sliding[part.layer],"GPT-OSS: invalid sliding checkpoint");
+        auto& cache=caches_[part.layer];
+        require(part.keys.size()<=cache.keys.size() && part.values.size()==part.keys.size(),"GPT-OSS: checkpoint capacity mismatch");
+        std::copy(part.keys.begin(),part.keys.end(),cache.keys.begin());
+        std::copy(part.values.begin(),part.values.end(),cache.values.begin());
+    }
+    position_=saved.position;
+    for(auto& cache:caches_) cache.seen=position_;
+}
 } // namespace strata::gpt_oss

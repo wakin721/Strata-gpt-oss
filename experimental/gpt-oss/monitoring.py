@@ -22,7 +22,7 @@ class Monitor:
         self.backend=backend;self.model=model;self.lock=threading.RLock()
         self.boot=time.time();self.instance=uuid.uuid4().hex
         self.current=None;self.recent=deque(maxlen=50);self.activity=deque(maxlen=32);self.sequence=0
-        self.totals={'since':self.boot,'requests':0,'prompt_tokens':0,'output_tokens':0}
+        self.totals={'since':self.boot,'requests':0,'prompt_tokens':0,'output_tokens':0,'reused_prompt_tokens':0}
         self.disconnects=0;self.timeouts=0;self.rejected=0
         self.hardware=Telemetry(extra=self.rates)
     def close(self):
@@ -35,9 +35,14 @@ class Monitor:
         with self.lock:
             self.current={'id':request_id,'time':time.time(),'started_mono':time.monotonic(),
                 'prompt_tokens':len(plan.ids),'max_tokens':plan.predict,'generated':0,'first_mono':None,
-                'first_engine_token_s':None}
+                'first_engine_token_s':None,'prompt_read':None,'reused':0}
             self.totals['requests']+=1;self.totals['prompt_tokens']+=len(plan.ids)
             self._event('reading')
+    def progress(self,event):
+        with self.lock:
+            if not self.current: return
+            self.totals['reused_prompt_tokens']+=event['reused']-self.current['reused']
+            self.current['prompt_read']=event['done'];self.current['reused']=event['reused']
     def token(self,event):
         with self.lock:
             if not self.current: return
@@ -64,7 +69,7 @@ class Monitor:
             if rate is None and c['generated']>=2 and first is not None and duration>first:
                 rate=(c['generated']-1)/(duration-first)
             self.recent.appendleft({'id':c['id'],'time':c['time'],'duration_s':duration,'finish':outcome,
-                'prompt_tokens':c['prompt_tokens'],'reused':0,'output_tokens':c['generated'],
+                'prompt_tokens':c['prompt_tokens'],'reused':c['reused'],'output_tokens':c['generated'],
                 'first_engine_token_s':c['first_engine_token_s'],'first_token_s':first,
                 'prompt_ms':prefill*1000 if prefill is not None else None,
                 'decode_ms':decode*1000 if decode is not None else None,'decode_tok_s':rate,
@@ -77,8 +82,10 @@ class Monitor:
         with self.lock:
             c=dict(self.current) if self.current else None
         run=self.backend.active
+        worker=getattr(self.backend,'worker',None)
+        loaded=bool(run and run.process.poll() is None) or bool(worker and worker.ready and not worker.closed and worker.process.poll() is None)
         return {'service':'strata','backend':'gpt-oss-native','model':self.model,'started':self.boot,
-            'loaded':bool(run and run.process.poll() is None),
+            'loaded':loaded,'persistent_engine':bool(getattr(self.backend.args,'persistent_engine',False)),
             'cache_max_tokens':self.backend.args.context,'busy':bool(c),
             'generated':c['generated'] if c else 0,
             'concurrency':{'serving':1,'requested':1,'active':int(bool(c)),'queued':0}}
@@ -91,15 +98,18 @@ class Monitor:
         slot={'slot':0,'group':0,'state':'decoding' if state=='generating' else state,
             'request_id':c['id'] if c else None,'prompt_tokens':c['prompt_tokens'] if c else None,
             'held_tokens':c['prompt_tokens']+c['generated'] if c else 0,
-            'generated':c['generated'] if c else 0,'prompt_read':None,
+            'generated':c['generated'] if c else 0,'prompt_read':c['prompt_read'] if c else None,
+            'prompt_reused':c['reused'] if c else None,
             'elapsed_s':now-c['started_mono'] if c else None,'tok_s':rate}
         hw=self.hardware.snapshot()
         return {'time':time.time(),'engine':{'model':self.model,'max_context':self.backend.args.context,
             'backend':'gpt-oss-native','expert_cache_mib':self.backend.args.expert_cache_mib if self.backend.args.expert_ptx else 0,
-            'experts':getattr(self.backend,'total_experts',None),'expert_slots':None,'batch_groups':1},
+            'experts':getattr(self.backend,'total_experts',None),'expert_slots':None,'batch_groups':1,
+            'persistent_engine':bool(getattr(self.backend.args,'persistent_engine',False))},
             'live':{'state':state,'phase':'prefill' if state=='reading' else 'decode' if c else None,
                 'queued':0,'running':int(bool(c)),'prompt_tokens':c['prompt_tokens'] if c else None,
-                'prompt_read':None,'prompt_total':None,'generated':c['generated'] if c else None,
+                'prompt_read':slot['prompt_read'],'prompt_total':c['prompt_tokens'] if c else None,
+                'prompt_reused':c['reused'] if c else None,'generated':c['generated'] if c else None,
                 'max_tokens':c['max_tokens'] if c else None,'elapsed_s':slot['elapsed_s'],
                 'tok_s':rate,'tok_s_mean':rate,'tok_s_window_s':None,'slots':[slot]},
             'requests':recent,'requests_kept':len(recent),'totals':totals,
@@ -115,7 +125,8 @@ class Monitor:
                 admission_rejected=self.rejected,queue_timeouts=self.timeouts,client_disconnect_cancels=self.disconnects)
             result['work']['requests']=[{'id':self.current['id'],'request_id':self.current['id'],
                 'state':'decoding' if self.current['first_mono'] is not None else 'reading',
-                'prompt_tokens':self.current['prompt_tokens'],'generated':self.current['generated']}] if self.current else []
+                'prompt_tokens':self.current['prompt_tokens'],'prompt_read':self.current['prompt_read'],
+                'reused':self.current['reused'],'generated':self.current['generated']}] if self.current else []
             result['activity']={'last_seq':self.sequence,'events':list(self.activity)}
             result['quality']['request_correlation']='measured'
         return result

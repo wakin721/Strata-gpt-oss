@@ -6,6 +6,7 @@ param(
     [int]$CpuExpertWorkers = 4,
     [int]$RequestTimeout = 900,
     [switch]$GroupHotExperts,
+    [switch]$PersistentEngine,
     [string]$ApiKeyEnv,
     [string]$SharedProfile
 )
@@ -25,6 +26,7 @@ if ($SharedProfile) {
 $gptApiArguments = @('-u', (Join-Path $PSScriptRoot 'api_server.py'), '--port', "$Port", '--context', "$Context", '--access', $Access,
     '--expert-cache-mib', "$ExpertCacheMiB", '--cpu-expert-workers', "$CpuExpertWorkers", '--request-timeout', "$RequestTimeout")
 if ($GroupHotExperts) { $gptApiArguments += '--group-hot-experts' }
+if ($PersistentEngine) { $gptApiArguments += '--persistent-engine' }
 if ($ApiKeyEnv) { $gptApiArguments += @('--api-key-env', $ApiKeyEnv) }
 try {
     & python @gptApiArguments

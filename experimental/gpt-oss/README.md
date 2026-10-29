@@ -138,7 +138,8 @@ On Windows, double-click `experimental\gpt-oss\start_api.bat`, or use PowerShell
 The launcher runs in the foreground. Ctrl+C stops the server and active native
 request. The default port is 8097, separate from released Strata's usual port.
 `-Port`, `-Context` (`2k`, `4k`, `128k` or a token count), `-Access local|lan`, `-ExpertCacheMiB`, `-CpuExpertWorkers`, `-RequestTimeout`, and
-`-GroupHotExperts` customize the launcher; `python experimental/gpt-oss/api_server.py
+`-GroupHotExperts` customize the launcher. `-PersistentEngine` enables the opt-in
+resident worker and prompt-prefix cache; `python experimental/gpt-oss/api_server.py
 --help` lists the remaining options.
 
 For a client that supports an OpenAI-compatible chat-completions endpoint:
@@ -196,9 +197,10 @@ existing Strata PowerShell launcher, such as `start_qwen_iq3.ps1`. It parses the
 AST without executing the script. Computed settings require explicit `-Access`
 or `-ApiKeyEnv`. The port and context remain explicitly configured for GPT-OSS.
 
-The HTTP process, template and tokenizer remain loaded. Each generation starts
-a fresh native process, so expert-cache contents and KV state are not reused
-between API calls. The client must send the conversation history. Long prefill
+The HTTP process, template and tokenizer remain loaded. By default each
+generation starts a fresh native process. `-PersistentEngine` retains the native
+process, expert cache and validated KV checkpoints between calls, as described
+below. In both modes the client must send the conversation history. Long prefill
 can still take minutes. SSE sends an immediate assistant-role event and periodic
 comments while waiting, then content deltas when text becomes available; the
 role event is not a model first-token timing. A disconnected streaming client or
@@ -212,6 +214,77 @@ Eight text/protocol tests also cover split UTF-8, Harmony headers, schema
 validation and truncated calls. Real 120B arithmetic API smoke results are recorded in
 `api-evidence.json`. This is experimental chat compatibility, not the complete
 released Strata API or a claim that Chinese writing quality is fixed.
+
+### Persistent engine and prompt-prefix reuse
+
+Opt in from the source root (the execution-policy setting applies only to this
+PowerShell process):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\experimental\gpt-oss\start_api.ps1 -PersistentEngine -ExpertCacheMiB 8192 -GroupHotExperts -CpuExpertWorkers 4
+```
+
+The workspace `start_gpt_oss.ps1` shortcut also accepts `-PersistentEngine`.
+Direct Python invocation uses `--persistent-engine`. The native executable must
+be rebuilt with this branch's `--serve` support. The ordinary one-shot command
+and default API mode keep their previous execution path.
+
+The worker loads lazily on the first request. It keeps the mapped weights,
+CUDA expert cache, CPU workers and KV allocation until the server closes or a
+request is canceled. Idle state can therefore still report `loaded: true` and
+use RAM/VRAM. KV grows to fit the largest request's prompt/output budget within
+the configured context; it is not initially allocated for all 128k positions.
+
+Reuse compares the incoming token IDs with the processed history. It restores
+the latest matching checkpoint and computes the remaining suffix. The final
+prompt token is always evaluated again to obtain current logits, so a repeated
+N-token prompt can reuse at most N-1 tokens. Changes to instructions, tools,
+dates or history automatically reduce the matching prefix.
+
+Sliding-attention rings need snapshots because later generation overwrites
+them. The worker retains at most eight checkpoints: the earliest anchor and
+the latest seven. It takes them at 256-token input boundaries, before the final
+input token, after input processing and at generation end. Global KV borrows
+the unchanged prefix; it is not copied into every checkpoint. Checkpoints past
+a branch point are discarded. This is a single active history, not a cache of
+multiple independent conversations.
+
+`usage.prompt_tokens_details.cached_tokens` reports actual reuse in buffered
+responses and optional SSE usage events. `/metrics` reports `prompt_read`,
+`prompt_total` and `prompt_reused`; recent requests expose `reused`. The worker
+sends progress during prefill, including on a cold request. `/status` identifies
+persistent mode and whether its worker remains loaded.
+
+For a numerical/quality comparison, `cache_prompt: false` forces that request
+to recompute its entire input while keeping the same model and expert cache.
+Its newly computed state can be reused by a later request. Cancellation, timeout,
+invalid protocol events or parser failure discard the worker instead; the next
+request starts a fresh one. Completed requests keep it. Native stdout is checked
+for request IDs, ordered tokens, progress, EOS and a matching final summary.
+No failed request is automatically replayed. Single-flight admission still
+returns 429 for another active request.
+
+The first unseen input still uses sequential prefill. This change targets
+repeated prefixes and conversation continuation; batched prefill and GPU
+attention/dense projections remain future work. Output quality limitations
+also remain. `persistent-evidence.json` records numerical tests and measured
+120B results, including failed quality diagnostics.
+
+Measured on the Ryzen 7 9800X3D / RTX 5070 Ti 16 GB machine, with an 8 GiB
+expert cache, grouping and four CPU expert workers:
+
+| 92-token arithmetic request | Reused tokens | Native first-token time | HTTP completion time |
+| --- | --- | --- | --- |
+| First request in persistent worker | 0 | 64.21 s | 65.83 s |
+| Same request again | 91 | 0.405 s | 1.47 s |
+| Fresh one-shot process afterwards | 0 | 41.62 s | 43.74 s |
+
+All three returned `4.`. File-cache state was uncontrolled, so the first and
+one-shot rows are not a controlled process-loading comparison. This demonstrates
+reuse on this short prompt, not a general first-token guarantee. A separate
+108-token continuation returned incorrect text identically in fresh, cached and
+warm/full-recompute modes; its cached first-token time was 0.400 s. Output quality
+remains a separate unresolved limitation.
 
 ### Reasoning effort and function tools
 
@@ -307,16 +380,17 @@ The monitor reports reading/generating/idle state, generated tokens, measured
 decode rate, request duration and first-token timing, recent requests, and
 Strata's existing NVML/CPU/RAM/disk sampler. Hardware values describe the machine,
 not exclusive GPU use by this process. Unavailable measurements remain null.
-The native engine does not yet send per-token prefill progress; prompt-read
-percentage and expert-residency slot counts are therefore unavailable. The
-engine still restarts for every API request; idle means the API is ready, with
-no resident native model process. Request/activity records contain no prompt text.
+With `-PersistentEngine`, native prefill progress and actual reused-token counts
+are available, and the native model stays resident while idle. The default
+one-shot mode retains its previous unavailable prefill-progress fields.
+Expert-residency slot counts remain unavailable. Request/activity records contain
+no prompt text.
 
 Port, local/LAN access, comma-separated keys, context units, and the monitor
 connection can match the old launcher's workflow. Qwen's 256k context and
 `--vision cpu` cannot be copied: this GPT-OSS model has a 128k model limit and
 is text-only. `strata launch --family gpt-oss` is still not a supported
-catalog launch. Tunnel access, native-engine restart management and the other
+catalog launch. Tunnel access and the other
 production engine switches have not been added to this adapter.
 
 Monitor tests include the actual `strata monitor --once --json` command, live

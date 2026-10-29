@@ -1,4 +1,5 @@
 #include "decoder.hpp"
+#include "worker.hpp"
 #ifdef STRATA_GPT_OSS_CUDA_DRIVER
 #include "gpu.hpp"
 #endif
@@ -37,7 +38,7 @@ int main(int argc,char** argv) {
         std::size_t predict=0,context=256;
         std::size_t cache_mib=64,cpu_workers=0;
         std::vector<std::size_t> stop_ids;
-        bool reset_check=false,fast_cpu=false,last_prompt_logits=false,stream=false,group_hot=false,kv_needed=false;
+        bool reset_check=false,fast_cpu=false,last_prompt_logits=false,stream=false,group_hot=false,kv_needed=false,serve=false;
         for(int i=1;i<argc;++i) {
             const std::string key=argv[i];
             if(key=="--help") {
@@ -50,6 +51,7 @@ int main(int argc,char** argv) {
                     "Opt-in speed: --fast-cpu --prompt-logits last --cpu-expert-workers 1..16 (GPU mode).\n"
                     "--stream flushes one JSON token event per prediction, followed by normal metrics.\n"
                     "--group-hot-experts shares input transfer and synchronization for resident GPU experts.\n"
+                    "--serve keeps a worker on stdin/stdout, with bounded prefix KV checkpoints.\n"
                     "Logits: little-endian float32; --prompt-logits all (default) emits every position;\n"
                     "last emits only the last prompt and generated positions (plus first with --reset-check).\n";
                 return 0;
@@ -59,6 +61,7 @@ int main(int argc,char** argv) {
             if(key=="--stream") { stream=true; continue; }
             if(key=="--group-hot-experts") { group_hot=true; continue; }
             if(key=="--kv-context-needed") { kv_needed=true; continue; }
+            if(key=="--serve") { serve=true; continue; }
             if(i+1==argc) throw std::invalid_argument("missing value for "+key);
             const std::string value=argv[++i];
             if(key=="--model") model=value;
@@ -77,6 +80,12 @@ int main(int argc,char** argv) {
                 last_prompt_logits=value=="last";
             }
             else throw std::invalid_argument("unknown argument: "+key);
+        }
+        if(serve) {
+            if(model.empty() || !token_list.empty() || !token_file.empty() || !output.empty() || !trace_dir.empty() || predict || reset_check)
+                throw std::invalid_argument("--serve requires --model and forbids one-shot input/output flags");
+            if((cpu_workers || group_hot) && expert_ptx.empty()) throw std::invalid_argument("GPU worker options require --expert-ptx");
+            return go::serve_worker({model,expert_ptx,context,cache_mib,cpu_workers,fast_cpu,group_hot});
         }
         if(model.empty() || token_list.empty()==token_file.empty()) throw std::invalid_argument("--model and exactly one of --tokens or --tokens-file are required");
         if(cpu_workers && expert_ptx.empty()) throw std::invalid_argument("--cpu-expert-workers requires --expert-ptx");

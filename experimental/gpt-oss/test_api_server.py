@@ -39,7 +39,7 @@ print('received_prompt_tokens='+str(len(prompt_ids)),flush=True)
 '''
 
 
-class ApiTests(unittest.TestCase):
+class ApiFixture(unittest.TestCase):
     def setUp(self):
         temp_root=Path.cwd()/'build-gpt-oss-api-test-temp';temp_root.mkdir(exist_ok=True)
         self.folder=tempfile.TemporaryDirectory(dir=temp_root);root=Path(self.folder.name)
@@ -72,6 +72,12 @@ class ApiTests(unittest.TestCase):
         while self.backend.gate.locked() and time.monotonic()<end: threading.Event().wait(.01)
         self.assertFalse(self.backend.gate.locked());self.assertIsNone(self.backend.active)
         self.assertFalse(list(self.backend.scratch_dir.glob('*.tokens')))
+    def harmony_output(self,text,eos='<|return|>'):
+        self.configure(ids=self.backend.tokenizer.encode(text,add_special_tokens=False).ids,
+            eos=self.backend.tokenizer.token_to_id(eos))
+
+
+class ApiTests(ApiFixture):
     def test_models_auth_and_buffered_multiturn(self):
         status,data=self.request(path='/v1/models');self.assertEqual(status,200);self.assertEqual(data['data'][0]['id'],MODEL_ID)
         model=data['data'][0]
@@ -205,9 +211,6 @@ class ApiTests(unittest.TestCase):
             {'messages':[{'role':'user','content':[{'type':'image_url','image_url':'x'}]}]},
             {'max_tokens':2048},{'max_tokens':2,'max_completion_tokens':3}):
             status,data=self.request(self.body(**change));self.assertEqual(status,400,(change,data));self.assertIsNone(self.backend.active)
-    def harmony_output(self,text,eos='<|return|>'):
-        self.configure(ids=self.backend.tokenizer.encode(text,add_special_tokens=False).ids,
-            eos=self.backend.tokenizer.token_to_id(eos))
     def test_each_reasoning_level_reaches_template_and_sse(self):
         self.backend.template=compile_template('Reasoning: {{ reasoning_effort }}{% for m in messages %}{{ m.content }}{% endfor %}<|start|>assistant')
         for level in ('low','medium','high'):

@@ -29,6 +29,15 @@ struct KV {
     void reset();
 };
 
+struct SlidingCheckpoint {
+    std::size_t layer;
+    std::vector<float> keys, values;
+};
+struct DecoderCheckpoint {
+    std::size_t position, epoch;
+    std::vector<SlidingCheckpoint> sliding;
+};
+
 class Block {
 public:
     Block(Loader& loader, const Config& config, std::size_t layer);
@@ -57,6 +66,11 @@ public:
     Decoder& operator=(Decoder&&) = delete;
     std::vector<float> forward(std::size_t token,const BlockObserver& observer = {},bool emit_logits=true);
     void reset();
+    // Checkpoints borrow the unchanged global-attention prefix in this decoder.
+    // The caller must discard checkpoints after the first overwritten position.
+    DecoderCheckpoint checkpoint() const;
+    void restore(const DecoderCheckpoint& checkpoint);
+    void reserve_context(std::size_t needed);
     const Config config;
     Profile profile;
     std::size_t position() const { return position_; }
@@ -70,7 +84,7 @@ private:
     std::vector<float> output_norm_;
     std::vector<Block> blocks_;
     std::vector<KV> caches_;
-    std::size_t max_context_, position_ = 0;
+    std::size_t max_context_, position_ = 0, epoch_ = 0;
     MixtureRunner runner_;
 };
 } // namespace strata::gpt_oss

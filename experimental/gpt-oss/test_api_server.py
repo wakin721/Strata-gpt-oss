@@ -67,6 +67,10 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(self.backend.gate.locked());self.assertIsNone(self.backend.active)
     def test_models_auth_and_buffered_multiturn(self):
         status,data=self.request(path='/v1/models');self.assertEqual(status,200);self.assertEqual(data['data'][0]['id'],MODEL_ID)
+        model=data['data'][0]
+        self.assertEqual(model['context_length'],self.backend.args.context)
+        self.assertEqual(model['modalities'],{'input':['text'],'output':['text']})
+        self.assertEqual(model['supported_reasoning_levels'],[{'effort':'low'}])
         self.http.api_key='secret'
         self.assertEqual(self.request(path='/v1/models')[0],401)
         self.assertEqual(self.request(path='/v1/models',headers={'Authorization':'Bearer secret'})[0],200)

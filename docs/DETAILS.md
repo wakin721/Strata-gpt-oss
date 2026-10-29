@@ -436,6 +436,10 @@ print(r.choices[0].message.content)
   the chat template, context limit, configured generation defaults, model path and engine version. `n_predict: -1` means no
   fixed output cap. `/slots` uses llama.cpp's names (`n_ctx`, `n_prompt_tokens`). `total_slots` is the number of `--batch` slots
   (1 without). These endpoints require the API key when one is configured and never load, unload or restart models.
+  Model entries also expose `context_length`, `modalities.input` / `.output` and
+  `supported_reasoning_levels` (`[{"effort":"none"}, ...]`) for Magpie's model discovery.
+  Context and vision mirror the active service; aliases inherit the same capabilities.
+  Reasoning levels are none/low/medium/high, plus max for DeepSeek V4.1.
 - **`chat_template_caps`** (llama.cpp's field names) is checked by rendering small requests when the template loads. A rejected
   feature is `false`. `supports_tools`, `supports_tool_calls`, `supports_parallel_tool_calls`, `supports_system_role` and
   `supports_preserve_reasoning` are hints for clients, not a promise that the model follows a request. Zed's llama.cpp provider

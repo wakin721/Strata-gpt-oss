@@ -3507,6 +3507,11 @@ class WebApp(unittest.TestCase):
                     self.assertEqual(model["id"], svc.model)
                     self.assertEqual(model["status"]["value"], "loaded")
                     self.assertEqual(model["meta"]["n_ctx"], 262144)
+                    self.assertEqual(model["context_length"], 262144)
+                    self.assertEqual(model["modalities"], {"input": ["text", "image"] if vision else ["text"],
+                                                           "output": ["text"]})
+                    self.assertEqual(model["supported_reasoning_levels"],
+                                     [{"effort": level} for level in ("none", "low", "medium", "high")])
                     self.assertEqual(model["architecture"]["input_modalities"],
                                      ["text", "image"] if vision else ["text"])
                 code, _, body = self.get("/props?model=" + svc.model + "&autoload=false")
@@ -3528,6 +3533,26 @@ class WebApp(unittest.TestCase):
             self.assertEqual(self.get("/props?model=not-loaded&autoload=true")[0], 404)
         finally:
             svc.engine.max_context, svc.vision, svc.sampling_defaults, svc.shared = previous
+
+    def test_model_discovery_efforts_follow_family_and_aliases(self):
+        svc = self.svc
+        previous = svc.family, svc.aliases
+        try:
+            svc.aliases = ["discovery-alias"]
+            for family, levels in ((None, ["none", "low", "medium", "high"]),
+                                   ("deepseek41", ["none", "low", "medium", "high", "max"])):
+                svc.family = family
+                for path in ("/models", "/v1/models"):
+                    code, _, body = self.get(path)
+                    self.assertEqual(code, 200)
+                    models = json.loads(body)["data"]
+                    self.assertEqual([m["id"] for m in models], [svc.model, "discovery-alias"])
+                    for model in models:
+                        self.assertEqual([x["effort"] for x in model["supported_reasoning_levels"]], levels)
+                        self.assertEqual(model["context_length"], svc.reported_ctx())
+                        self.assertEqual(model["modalities"]["input"], model["architecture"]["input_modalities"])
+        finally:
+            svc.family, svc.aliases = previous
 
     def test_props_caps_follow_the_active_template(self):
         source = self.svc.template.source

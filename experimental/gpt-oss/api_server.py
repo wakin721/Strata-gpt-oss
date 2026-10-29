@@ -225,7 +225,12 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized(): return
         path=urlsplit(self.path).path.rstrip('/')
         if path=='/v1/models':
-            self._json(200,{'object':'list','data':[{'id':MODEL_ID,'object':'model','created':0,'owned_by':'local'}]})
+            self._json(200,{'object':'list','data':[{'id':MODEL_ID,'object':'model','created':0,'owned_by':'local',
+                'context_length':self.server.backend.args.context,
+                'modalities':{'input':['text'],'output':['text']},
+                # The template is currently fixed to low; other official model
+                # effort levels are not yet implemented by this adapter.
+                'supported_reasoning_levels':[{'effort':'low'}]}]})
         elif path in ('','/health'):
             self._json(200,{'status':'busy' if self.server.backend.gate.locked() else 'ok','model':MODEL_ID})
         else: self._error(404,'unknown endpoint')

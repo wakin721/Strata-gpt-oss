@@ -7126,7 +7126,14 @@ def make_handler(svc: Service):
                     model = {"id": svc.model, "object": "model", "status": {"value": "loaded"},
                              "meta": {"n_ctx": svc.reported_ctx()},
                              "architecture": {"input_modalities": ["text", "image"] if svc.vision is not None else ["text"],
-                                              "output_modalities": ["text"]}}
+                                              "output_modalities": ["text"]},
+                             # Magpie reads these fields when discovering generic /models providers.
+                             "context_length": svc.reported_ctx(),
+                             "modalities": {"input": ["text", "image"] if svc.vision is not None else ["text"],
+                                            "output": ["text"]},
+                             "supported_reasoning_levels": [{"effort": level} for level in
+                                 (["none", "low", "medium", "high", "max"] if svc.family == "deepseek41" else
+                                  ["none", "low", "medium", "high"])]}
                     if not loaded and (svc.idle_unload_s or getattr(svc.engine, "unloaded", False)):
                         model["status"] = {"value": "unloaded"}   # like llama-server's router: listed, loads on use
                         loaded = True

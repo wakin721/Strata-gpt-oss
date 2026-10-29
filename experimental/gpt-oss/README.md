@@ -157,6 +157,10 @@ history, `max_tokens` or `max_completion_tokens`, up to four stop strings,
 ordinary JSON responses, and SSE `chat.completion.chunk` events ending in
 `[DONE]`. `stream_options.include_usage` requests a final usage event. Native
 token bytes use the same incremental UTF-8/final-message decoder as the terminal.
+Model discovery includes Magpie's `supported_reasoning_levels`, `modalities.input`
+and `context_length` fields. This adapter reports only `[{"effort":"low"}]`, text
+input/output and the configured service context, matching the path actually
+implemented here rather than advertising unsupported model settings.
 
 The native decoder currently samples greedily. Explicit requests for other
 temperatures, nontrivial sampling filters/penalties, tools, images, logprobs or

@@ -6,7 +6,7 @@ namespace strata::gpt_oss {
 // Windows CUDA-driver prototype. Attention/KV remain on CPU.
 class HybridExperts {
 public:
-    HybridExperts(Loader& loader,const std::string& ptx,std::size_t cache_mib,std::size_t cpu_workers=0);
+    HybridExperts(Loader& loader,const std::string& ptx,std::size_t cache_mib,std::size_t cpu_workers=0,bool group_hot=false);
     ~HybridExperts();
     HybridExperts(const HybridExperts&)=delete;
     HybridExperts& operator=(const HybridExperts&)=delete;
@@ -14,6 +14,8 @@ public:
     std::size_t gpu_calls() const;
     std::size_t cpu_calls() const;
     std::size_t resident_bytes() const;
+    std::size_t gpu_syncs() const;
+    double cache_admission_seconds() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

@@ -13,6 +13,7 @@
 #include <deque>
 #include <mutex>
 #include <thread>
+#include <chrono>
 
 namespace strata::gpt_oss {
 namespace {
@@ -118,9 +119,11 @@ struct HybridExperts::Impl {
     DevicePtr input=0,hidden=0,output=0;
     std::map<std::uint64_t,Resident> cache;
     std::map<std::uint64_t,std::size_t> frequency;
-    std::size_t budget,used=0,gpu=0,cpu=0;
+    std::size_t budget,used=0,gpu=0,cpu=0,syncs=0,output_capacity=1;
+    bool group_hot=false;
+    double admission_seconds=0;
     Workers workers;
-    Impl(Loader& l,const std::string& ptx,std::size_t mib,std::size_t cpu_workers) : loader(l),budget(mib*1024*1024),workers(cpu_workers) {
+    Impl(Loader& l,const std::string& ptx,std::size_t mib,std::size_t cpu_workers,bool grouped) : loader(l),budget(mib*1024*1024),group_hot(grouped),workers(cpu_workers) {
         if(mib==0 || mib>1024*1024) throw std::invalid_argument("invalid GPU cache budget");
         try {
             check(driver.init(0),"init"); int device=0; check(driver.device(&device,0),"device");
@@ -130,7 +133,11 @@ struct HybridExperts::Impl {
             const auto code=buffer.str(); check(driver.module_load(&module,code.c_str()),"module load");
             check(driver.function(&gate,module,"gate_up"),"gate function"); check(driver.function(&down,module,"down"),"down function");
             check(driver.alloc(&input,loader.h*4),"input allocation"); check(driver.alloc(&hidden,loader.f*4),"hidden allocation");
-            check(driver.alloc(&output,loader.h*4),"output allocation");
+            if(group_hot) {
+                output_capacity=meta_integer(loader.model.meta(),"gpt-oss.expert_used_count");
+                if(output_capacity>loader.experts) throw std::invalid_argument("GPU top-k exceeds expert count");
+            }
+            check(driver.alloc(&output,loader.h*4*output_capacity),"output allocation");
         } catch(...) { clear(); throw; }
     }
     void release(Resident& value) { for(auto p:value.pointers) if(p) driver.free(p); }
@@ -168,22 +175,44 @@ struct HybridExperts::Impl {
         } catch(...) { release(value); throw; }
         used+=value.bytes; cache.emplace(id,value);
     }
-    std::vector<float> evaluate(Resident& e,std::span<const float> activation) {
-        check(driver.upload(input,activation.data(),activation.size_bytes()),"activation upload");
+    void enqueue(Resident& e,DevicePtr destination) {
         void* gate_args[]={&e.pointers[0],&e.pointers[1],&e.pointers[3],&e.pointers[4],&input,&hidden,&e.h,&e.f,&e.gf,&e.uf};
         check(driver.launch(gate,e.f,1,1,32,1,1,0,nullptr,gate_args,nullptr),"gate launch");
-        void* down_args[]={&e.pointers[2],&e.pointers[5],&hidden,&output,&e.h,&e.f,&e.df};
+        void* down_args[]={&e.pointers[2],&e.pointers[5],&hidden,&destination,&e.h,&e.f,&e.df};
         check(driver.launch(down,e.h,1,1,32,1,1,0,nullptr,down_args,nullptr),"down launch");
-        check(driver.sync(),"expert synchronization");
+    }
+    std::vector<float> evaluate(Resident& e,std::span<const float> activation) {
+        check(driver.upload(input,activation.data(),activation.size_bytes()),"activation upload");
+        enqueue(e,output);
+        check(driver.sync(),"expert synchronization");++syncs;
         std::vector<float> result(e.h); check(driver.download(result.data(),output,result.size()*4),"expert download");
         ++gpu; return result;
     }
+    void evaluate_group(std::size_t layer,const Routes& routes,std::span<const std::size_t> hot,
+                        std::span<const float> activation,std::vector<std::vector<float>>& parts) {
+        if(hot.empty()) return;
+        if(hot.size()>output_capacity) throw std::invalid_argument("GPU hot group exceeds output capacity");
+        check(driver.upload(input,activation.data(),activation.size_bytes()),"group activation upload");
+        // The default CUDA stream orders gate/down pairs, so all experts may
+        // reuse hidden while writing to separate output slots. Cache entries
+        // remain resident until the entire group has completed.
+        for(std::size_t slot=0;slot<hot.size();++slot)
+            enqueue(cache.at(key(layer,routes.ids[hot[slot]])),output+slot*loader.h*4);
+        check(driver.sync(),"group expert synchronization");++syncs;
+        std::vector<float> values(hot.size()*loader.h);
+        check(driver.download(values.data(),output,values.size()*4),"group expert download");
+        for(std::size_t slot=0;slot<hot.size();++slot)
+            parts[hot[slot]].assign(values.begin()+slot*loader.h,values.begin()+(slot+1)*loader.h);
+        gpu+=hot.size();
+    }
 };
-HybridExperts::HybridExperts(Loader& loader,const std::string& ptx,std::size_t cache_mib,std::size_t cpu_workers) : impl_(std::make_unique<Impl>(loader,ptx,cache_mib,cpu_workers)) {}
+HybridExperts::HybridExperts(Loader& loader,const std::string& ptx,std::size_t cache_mib,std::size_t cpu_workers,bool group_hot) : impl_(std::make_unique<Impl>(loader,ptx,cache_mib,cpu_workers,group_hot)) {}
 HybridExperts::~HybridExperts()=default;
 std::size_t HybridExperts::gpu_calls() const { return impl_->gpu; }
 std::size_t HybridExperts::cpu_calls() const { return impl_->cpu; }
 std::size_t HybridExperts::resident_bytes() const { return impl_->used; }
+std::size_t HybridExperts::gpu_syncs() const { return impl_->syncs; }
+double HybridExperts::cache_admission_seconds() const { return impl_->admission_seconds; }
 std::vector<float> HybridExperts::mixture(std::size_t layer,const Routes& routes,std::span<const float> input) {
     auto& s=*impl_;
     if(input.size()!=s.loader.h || routes.ids.size()!=routes.weights.size()) throw std::invalid_argument("hybrid expert request shape mismatch");
@@ -209,7 +238,8 @@ std::vector<float> HybridExperts::mixture(std::size_t layer,const Routes& routes
         } else if(!cold.empty()) {
             work.push_back(std::async(std::launch::async,[&]{for(auto i:cold) evaluate_cold(i);}));
         }
-        for(auto i:hot) parts[i]=s.evaluate(s.cache.at(key(layer,routes.ids[i])),input);
+        if(s.group_hot) s.evaluate_group(layer,routes,hot,input,parts);
+        else for(auto i:hot) parts[i]=s.evaluate(s.cache.at(key(layer,routes.ids[i])),input);
         for(auto& job:work) job.wait();
         for(auto& job:work) job.get();
     } catch(...) { for(auto& job:work) if(job.valid()) job.wait();throw; }
@@ -218,10 +248,12 @@ std::vector<float> HybridExperts::mixture(std::size_t layer,const Routes& routes
     for(std::size_t i=0;i<parts.size();++i)
         for(std::size_t j=0;j<result.size();++j) result[j]+=routes.weights[i]*parts[i][j];
     // Promotion follows completion; no cache slot is freed while a GPU kernel uses it.
+    const auto admission_start=std::chrono::steady_clock::now();
     for(auto i:cold) {
         const LoadedExpert loaded(s.loader,layer,routes.ids[i]);
         s.admit(key(layer,routes.ids[i]),loaded.view());
     }
+    s.admission_seconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-admission_start).count();
     return result;
 }
 } // namespace strata::gpt_oss

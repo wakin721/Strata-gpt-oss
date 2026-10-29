@@ -68,7 +68,8 @@ Harmony. Use the Python text probe below for a template-based one-shot test.
 
 ## One-shot text probe
 
-Python needs the locally installed `tokenizers` and `transformers` packages. The
+Python needs `tokenizers` and `jinja2` for fast mode; the default renderer also
+uses the locally installed `transformers` package. The
 wrapper uses the template stored in the GGUF, the downloaded tokenizer and the
 client date in Asia/Taipei. The computation stays in `strata-gpt-oss-cpu`.
 
@@ -79,13 +80,116 @@ python experimental\gpt-oss\run_prompt.py --model ..\strata_data\models\gpt-oss-
 The default explicitly requests the final channel; `--thinking` allows analysis
 before final but may need a larger token budget. Generation stops at the model's
 terminal token IDs. This is a diagnostic command: input processing is currently
-sequential and can take minutes, and output is displayed after generation.
-It has no conversation loop, tool execution, streaming API or background service.
+sequential and can take minutes. Output is displayed after generation unless
+`--stream` is selected. It has no conversation loop, tool execution, HTTP streaming
+API or background service.
 An optional `--output FILE.json` saves the explicit prompt's test result locally.
+
+## Stream final-channel text
+
+Add `--fast --stream` to the one-shot command. The native engine flushes a JSON
+line immediately after selecting each token. Python reads those lines while the
+engine runs, decodes ByteLevel token bytes with an incremental UTF-8 decoder,
+filters Harmony headers/end markers, and flushes complete text fragments. Split
+Chinese characters and emoji wait for their remaining bytes rather than printing
+replacement characters. With `--thinking`, display waits for the final channel.
+Forced-final requests also stop at the message-end token, preventing a malformed
+continuation from starting another generated role. The display retains the first
+final message when later role/header tokens appear.
+
+For this workspace's downloaded model, a shortcut resolves all local paths:
+
+```powershell
+.\experimental\gpt-oss\run_local.ps1 -Prompt '用中文写一句雨夜街景，20字以内。' -MaxNewTokens 48
+```
+
+The shortcut opts in to fast CPU kernels and streaming, and uses a 4 GiB expert
+cache. `-ExpertCacheMiB 8192 -GroupHotExperts` selects the further experiments
+below; `-Output result.json` saves the answer, native metrics and event timings.
+Ctrl+C terminates the child engine. The wrapper also terminates it if decoding or
+the output pipe fails.
+
+Native `--stream` events have `event`, `index`, `id`, `seconds` (since model
+execution began), and `eos`. Normal `key=value` summary metrics follow the events.
+`first_token_seconds` measures engine time to the first selected token;
+`decode_tokens_per_second` counts subsequent evaluated positions divided by their
+wall time, including sampling and stream flushing. EOS is counted if selected.
+`--output` additionally records the first received event and first displayed text
+relative to engine launch, plus request-to-first-text time including Python setup.
+First text can lag first token when a UTF-8 character spans several tokens.
+
+Streaming improves display latency after prefill. It does not reduce the compute
+needed before the first token, or imply a higher inference throughput.
+
+## Further optimization checks on 2026-10-29
+
+`--group-hot-experts` is a separate opt-in. It uploads one activation per layer's
+resident expert group, launches ordered gate/down pairs into distinct output
+slots, then synchronizes/downloads the group once. It reuses the existing PTX
+kernels and preserves router merge order. Cold CPU experts still run concurrently.
+
+On the same Ryzen 7 9800X3D / RTX 5070 Ti system, grouping reduced GPU expert
+synchronizations from 1,490 to 624 in the short workload and from 5,737 to 2,947
+in the 92-token workload. Retained logits are bit-identical to the prior fast
+path in both workloads. A same-day baseline took 14.82 / 75.52 s, and grouped
+runs took 10.27 / 62.47 s. Another ungrouped short run took 12.55 s. File-cache
+state and memory pressure were uncontrolled, so these timings do not establish
+a stable additional throughput gain. Grouping remains separate from `--fast`.
+
+The new `cache_admission_seconds` metric measures promotion/eviction work inside
+the expert stage. The grouped full run spent 2.05 s in admission out of 56.03 s
+in the complete expert stage. This points to measuring cold-expert CPU work and
+weight access before further tuning the cache policy.
+
+Increasing the expert cache from 4 to 8 GiB reduced CPU expert calls from 7,655
+to 5,662 (26.0%) on the same full workload; GPU calls rose from 5,737 to 7,730.
+The 8 GiB run took 43.53 s, with 3.24 s in cache admission. Both retained top-1
+IDs agree; relative L2 logits difference is `6.44e-7` because more expert dots
+now run on GPU. This is one run with the same cache-state caveat. The tested
+machine had room for the larger budget; the default remains 4 GiB.
+
+Next priorities, not yet implemented:
+
+1. Extend full-model parity to longer Chinese inputs before more aggressive
+   optimizations. The real Chinese stream diagnostic produced repetition and
+   unrelated English commentary, so it fails the requested writing task. Fixing
+   role boundaries limits displayed continuation; it does not fix model quality.
+2. Batch prefill by layer and group tokens selecting the same experts, so prompt
+   tokens reuse weight reads and matrix operations. This targets first-token
+   latency; causal attention, routing and KV correctness need separate checks.
+3. Keep an engine process, expert cache and validated prompt-prefix KV state
+   across requests. This saves setup and repeated-prefix work in conversations.
+4. Profile cold-expert compute versus mapped-weight page faults, then tune the
+   MXFP4 CPU kernels, memory placement and prefetch. The model file is about
+   59 GiB while this machine has 47.66 GiB RAM, so full RAM residency is impossible.
+5. Move dense projections/attention to GPU where measurements justify the VRAM
+   cost, and compare longer generation with a controlled cache/memory workload.
+
+Fast mode now renders the GGUF template directly in a Jinja immutable sandbox,
+with the same JSON filter semantics and an Asia/Taipei clock. Three fresh-process
+setup runs (rendering plus tokenizer load/encoding) took 0.57–0.62 s versus
+4.03–4.37 s through Transformers. Prompt bytes and all 97 token IDs agree exactly
+for the fixed-date Chinese input. This saves Python preparation time, not native
+prefill time; templates using additional generation-tracking extensions are not
+supported by the lightweight renderer. The original renderer remains available
+without `--fast`.
+
+Ten suites pass, including grouped GPU/CPU parity, token events/EOS, Unicode and
+Harmony decoding, and a pipe handshake that prevents a test producer from
+finishing until the consumer has displayed text. Raw local results and scope
+are recorded in `stream-evidence.json`. The Chinese diagnostic is retained as a
+failed writing-quality check. These checks cover terminal streaming;
+an HTTP/SSE API would be a separate service layer.
+The corrected 97-token Chinese diagnostic generated 36 tokens including its
+message-end token: 35 decode evaluations took 25.92 s (1.35 tokens/s), with
+77.15 s engine time to the first token. The earlier 48-token diagnostic measured
+1.46 tokens/s. These longer, failed-quality diagnostics show that the earlier
+2.1–2.3 tokens/s short tests should not be treated as sustained writing speed.
 
 ## Opt-in speed mode, measured on 2026-10-29
 
-Add `--fast` to `run_prompt.py` to enable direct AVX2/F16C row dots, skip
+Add `--fast` to `run_prompt.py` to enable lightweight template rendering,
+direct AVX2/F16C row dots, skip
 intermediate prompt vocabulary projections, and use four persistent CPU expert
 workers when GPU experts are enabled. The token-ID executable exposes these as
 `--fast-cpu --prompt-logits last --cpu-expert-workers 4`.

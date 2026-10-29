@@ -37,7 +37,7 @@ int main(int argc,char** argv) {
         std::size_t predict=0,context=256;
         std::size_t cache_mib=64,cpu_workers=0;
         std::vector<std::size_t> stop_ids;
-        bool reset_check=false,fast_cpu=false,last_prompt_logits=false;
+        bool reset_check=false,fast_cpu=false,last_prompt_logits=false,stream=false,group_hot=false;
         for(int i=1;i<argc;++i) {
             const std::string key=argv[i];
             if(key=="--help") {
@@ -46,12 +46,16 @@ int main(int argc,char** argv) {
                     "Windows GPU experts: --expert-ptx FILE --expert-cache-mib N (attention remains on CPU).\n"
                     "Optional: --eos ID,ID stops generation; --trace-dir DIR writes per-layer F32 state.\n"
                     "Opt-in speed: --fast-cpu --prompt-logits last --cpu-expert-workers 1..16 (GPU mode).\n"
+                    "--stream flushes one JSON token event per prediction, followed by normal metrics.\n"
+                    "--group-hot-experts shares input transfer and synchronization for resident GPU experts.\n"
                     "Logits: little-endian float32; --prompt-logits all (default) emits every position;\n"
                     "last emits only the last prompt and generated positions (plus first with --reset-check).\n";
                 return 0;
             }
             if(key=="--reset-check") { reset_check=true; continue; }
             if(key=="--fast-cpu") { fast_cpu=true; continue; }
+            if(key=="--stream") { stream=true; continue; }
+            if(key=="--group-hot-experts") { group_hot=true; continue; }
             if(i+1==argc) throw std::invalid_argument("missing value for "+key);
             const std::string value=argv[++i];
             if(key=="--model") model=value;
@@ -72,6 +76,7 @@ int main(int argc,char** argv) {
         }
         if(model.empty() || token_list.empty()) throw std::invalid_argument("--model and --tokens are required");
         if(cpu_workers && expert_ptx.empty()) throw std::invalid_argument("--cpu-expert-workers requires --expert-ptx");
+        if(group_hot && expert_ptx.empty()) throw std::invalid_argument("--group-hot-experts requires --expert-ptx");
         const auto ids=tokens(token_list);
         go::set_fast_cpu(fast_cpu);
         go::Loader loader(model);
@@ -79,7 +84,7 @@ int main(int argc,char** argv) {
 #ifdef STRATA_GPT_OSS_CUDA_DRIVER
         std::unique_ptr<go::HybridExperts> hybrid;
         if(!expert_ptx.empty()) {
-            hybrid=std::make_unique<go::HybridExperts>(loader,expert_ptx,cache_mib,cpu_workers);
+            hybrid=std::make_unique<go::HybridExperts>(loader,expert_ptx,cache_mib,cpu_workers,group_hot);
             runner=[&](auto layer,const auto& routes,auto input) { return hybrid->mixture(layer,routes,input); };
         }
 #else
@@ -118,22 +123,34 @@ int main(int argc,char** argv) {
             if(i==0) first=logits;
         }
         const auto prefill_end=std::chrono::steady_clock::now();
-        std::cout << "execution=" << (runner ? "native_cpu_gpu_experts" : "native_cpu_reference")
-                  << "\nattention_device=cpu\nchat_supported=false\nvocab=" << decoder.config.vocab << "\npredicted_token_ids=";
+        std::vector<std::size_t> generated;
+        double first_token_seconds=0;
         for(std::size_t i=0;i<predict;++i) {
             const auto next=static_cast<std::size_t>(std::max_element(logits.begin(),logits.end())-logits.begin());
-            if(i) std::cout << ',';
-            std::cout << next;
-            if(std::find(stop_ids.begin(),stop_ids.end(),next)!=stop_ids.end()) break;
+            const bool eos=std::find(stop_ids.begin(),stop_ids.end(),next)!=stop_ids.end();
+            generated.push_back(next);
+            const double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
+            if(i==0) first_token_seconds=seconds;
+            if(stream) std::cout << "{\"event\":\"token\",\"index\":" << i << ",\"id\":" << next
+                                 << ",\"seconds\":" << seconds << ",\"eos\":" << (eos ? "true" : "false") << "}\n" << std::flush;
+            if(eos) break;
             if(i+1<predict) forward(next);
         }
+        const auto generation_end=std::chrono::steady_clock::now();
+        const double decode_seconds=std::chrono::duration<double>(generation_end-prefill_end).count();
+        std::cout << "execution=" << (runner ? "native_cpu_gpu_experts" : "native_cpu_reference")
+                  << "\nattention_device=cpu\nchat_supported=false\nvocab=" << decoder.config.vocab << "\npredicted_token_ids=";
+        for(std::size_t i=0;i<generated.size();++i) { if(i) std::cout << ',';std::cout << generated[i]; }
         std::cout << "\nlogit_records=" << records << "\nlast_argmax=" << (std::max_element(logits.begin(),logits.end())-logits.begin())
                   << "\nevaluated_positions=" << positions
                   << "\ncpu_kernels=" << (fast_cpu ? "avx2" : "scalar")
                   << "\ncpu_expert_workers=" << cpu_workers
                   << "\nprefill_seconds=" << std::chrono::duration<double>(prefill_end-begin).count()
-                  << "\ndecode_seconds=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-prefill_end).count()
-                  << "\nelapsed_seconds=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count()
+                  << "\ndecode_seconds=" << decode_seconds
+                  << "\nfirst_token_seconds=" << first_token_seconds
+                  << "\ndecode_evaluations=" << positions-ids.size()
+                  << "\ndecode_tokens_per_second=" << (decode_seconds>0 ? (positions-ids.size())/decode_seconds : 0)
+                  << "\nelapsed_seconds=" << std::chrono::duration<double>(generation_end-begin).count()
                   << "\nprofile_attention_seconds=" << decoder.profile.attention_seconds
                   << "\nprofile_expert_seconds=" << decoder.profile.expert_seconds
                   << "\nprofile_head_seconds=" << decoder.profile.head_seconds << '\n';
@@ -146,7 +163,10 @@ int main(int argc,char** argv) {
         }
 #ifdef STRATA_GPT_OSS_CUDA_DRIVER
         if(hybrid) std::cout << "gpu_expert_calls=" << hybrid->gpu_calls() << "\ncpu_expert_calls=" << hybrid->cpu_calls()
-                            << "\nexpert_cache_bytes=" << hybrid->resident_bytes() << '\n';
+                            << "\nexpert_cache_bytes=" << hybrid->resident_bytes()
+                            << "\ngpu_expert_syncs=" << hybrid->gpu_syncs()
+                            << "\ncache_admission_seconds=" << hybrid->cache_admission_seconds()
+                            << "\ngroup_hot_experts=" << group_hot << '\n';
 #endif
         return 0;
     } catch(const std::exception& error) { std::cerr << "GPT-OSS CPU: " << error.what() << '\n'; return 1; }

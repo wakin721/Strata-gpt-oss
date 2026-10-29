@@ -14,7 +14,7 @@ def main():
     parser.add_argument('--tokens-json',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--cache-mib',type=int,default=4096)
-    parser.add_argument('--case',action='append',choices=['short-scalar','short-avx2','short-last','short-workers','template-fast',
+    parser.add_argument('--case',action='append',choices=['short-scalar','short-avx2','short-last','short-workers','template-fast','short-grouped','template-grouped',
         'short-baseline','template-baseline'],help='Run only selected cases; may be repeated')
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=True)
@@ -24,7 +24,9 @@ def main():
         ('short-avx2',ids[-13:],8,['--fast-cpu']),
         ('short-last',ids[-13:],8,['--fast-cpu','--prompt-logits','last']),
         ('short-workers',ids[-13:],8,['--fast-cpu','--prompt-logits','last','--cpu-expert-workers','4']),
-        ('template-fast',ids,2,['--fast-cpu','--prompt-logits','last','--cpu-expert-workers','4'])]
+        ('template-fast',ids,2,['--fast-cpu','--prompt-logits','last','--cpu-expert-workers','4']),
+        ('short-grouped',ids[-13:],8,['--fast-cpu','--prompt-logits','last','--cpu-expert-workers','4','--group-hot-experts']),
+        ('template-grouped',ids,2,['--fast-cpu','--prompt-logits','last','--cpu-expert-workers','4','--group-hot-experts'])]
     cases=[(name,prompt,predict,extra,args.engine) for name,prompt,predict,extra in cases]
     if args.baseline_engine:
         cases=[('short-baseline',ids[-13:],8,[],args.baseline_engine),

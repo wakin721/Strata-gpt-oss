@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import math
+import json
 import os
 import struct
 import subprocess
@@ -153,6 +154,8 @@ class DecoderTests(unittest.TestCase):
             extra=(*extra,'--expert-ptx',os.environ['GPT_OSS_GPU_PTX'],'--expert-cache-mib','1')
             if os.environ.get('GPT_OSS_CPU_WORKERS'):
                 extra=(*extra,'--cpu-expert-workers',os.environ['GPT_OSS_CPU_WORKERS'])
+            if os.environ.get('GPT_OSS_GROUP_HOT'):
+                extra=(*extra,'--group-hot-experts')
         result=subprocess.run([str(CPU),'--model',str(path),'--tokens',','.join(map(str,ids)),
             '--context','256','--logits-out',str(out),*extra],capture_output=True,text=True,timeout=30)
         if os.environ.get('GPT_OSS_FAST_CPU') and 'AVX2/F16C kernels are unsupported' in result.stderr:
@@ -227,6 +230,30 @@ class DecoderTests(unittest.TestCase):
                 np.testing.assert_array_equal(actual,expected)
                 self.assertIn('evaluated_positions=10',result.stdout)
                 if reset: self.assertIn('reset_check=passed',result.stdout)
+
+    def test_stream_events_preserve_logits_and_stop_at_eos(self):
+        with tempfile.TemporaryDirectory(dir=TEMP) as folder:
+            path=Path(folder)/'model.gguf';fixture(path,dense_kind=8,expert_kind=39,yarn=True)
+            full=Path(folder)/'all.bin'
+            original=self.run_cpu(path,[2,3,5],full,('--predict','4','--prompt-logits','last'))
+            self.assertEqual(original.returncode,0,original.stderr)
+            ids=[int(x) for x in next(line.split('=',1)[1] for line in original.stdout.splitlines() if line.startswith('predicted_token_ids=')).split(',')]
+            for stop in (False,True):
+                out=Path(folder)/f'stream-{stop}.bin'
+                extra=('--predict','4','--prompt-logits','last','--stream',*(['--eos',str(ids[0])] if stop else []))
+                result=self.run_cpu(path,[2,3,5],out,extra)
+                self.assertEqual(result.returncode,0,result.stderr)
+                events=[json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
+                expected=ids[:1] if stop else ids
+                self.assertEqual([event['id'] for event in events],expected)
+                self.assertEqual([event['index'] for event in events],list(range(len(expected))))
+                self.assertEqual([event['eos'] for event in events],[True] if stop else [False]*4)
+                times=[event['seconds'] for event in events]
+                self.assertEqual(times,sorted(times))
+                np.testing.assert_array_equal(np.fromfile(out,dtype='<f4'),np.fromfile(full,dtype='<f4')[:len(expected)*11])
+                if os.environ.get('GPT_OSS_GPU_PTX'):
+                    values=dict(line.split('=',1) for line in result.stdout.splitlines() if '=' in line)
+                    self.assertLessEqual(int(values['gpu_expert_syncs']),int(values['gpu_expert_calls']))
 
 
 if __name__=='__main__': unittest.main()

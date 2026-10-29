@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
+from stream_text import StreamingAnswer,answer_from_raw,consume_stream
 
 
 def main():
@@ -23,6 +25,8 @@ def main():
     parser.add_argument('--expert-ptx',type=Path)
     parser.add_argument('--expert-cache-mib',type=int,default=4096)
     parser.add_argument('--fast',action='store_true',help='Opt in to AVX2/F16C, last-prompt logits and persistent CPU expert workers')
+    parser.add_argument('--stream',action='store_true',help='Display final-channel text as each token arrives')
+    parser.add_argument('--group-hot-experts',action='store_true',help='Opt in to grouped GPU expert transfers/synchronization')
     parser.add_argument('--cpu-expert-workers',type=int,default=4,help='With --fast and --expert-ptx: persistent CPU workers (1..16)')
     parser.add_argument('--thinking',action='store_true',help='Allow analysis before final; otherwise request the final channel directly')
     parser.add_argument('--output',type=Path,help='Optional local JSON record')
@@ -30,9 +34,14 @@ def main():
     if args.max_new_tokens<1 or args.context<1: parser.error('token limits must be positive')
     if not 1<=args.cpu_expert_workers<=16: parser.error('CPU expert workers must be between 1 and 16')
     if args.output and args.output.exists(): parser.error('output already exists; choose a new path')
+    if args.group_hot_experts and not args.expert_ptx: parser.error('--group-hot-experts requires --expert-ptx')
+    request_begin=time.perf_counter()
     from fetch_expert import Header
     from tokenizers import Tokenizer
-    from transformers.utils.chat_template_utils import _compile_jinja_template
+    if args.fast:
+        from template_text import compile_template
+    else:
+        from transformers.utils.chat_template_utils import _compile_jinja_template as compile_template
     with args.model.open('rb') as source:
         for size in (4<<20,8<<20,16<<20,32<<20):
             source.seek(0)
@@ -40,7 +49,7 @@ def main():
             except EOFError: continue
         else: raise ValueError('GGUF directory exceeds 32 MiB')
     if metadata.get('general.architecture')!='gpt-oss': raise ValueError('expected gpt-oss GGUF')
-    template=_compile_jinja_template(metadata['tokenizer.chat_template'])
+    template=compile_template(metadata['tokenizer.chat_template'])
     today=datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).date().isoformat()
     messages=[{'role':'system','content':args.system},{'role':'user','content':args.prompt}]
     prompt=template.render(messages=messages,add_generation_prompt=True,tools=None,reasoning_effort='low',current_date=today)
@@ -48,30 +57,54 @@ def main():
     tokenizer=Tokenizer.from_file(str(args.tokenizer/'tokenizer.json'))
     ids=tokenizer.encode(prompt,add_special_tokens=False).ids
     if len(ids)+args.max_new_tokens-1>args.context: parser.error('prompt and requested output exceed --context')
+    # In a forced final channel, a message boundary also ends this response.
+    # Thinking mode must allow an analysis message to end before final begins.
+    stop_ids='200002,199999,200012'+('' if args.thinking else ',200007')
     command=[str(args.engine.resolve()),'--model',str(args.model.resolve()),'--tokens',','.join(map(str,ids)),
-        '--context',str(args.context),'--predict',str(args.max_new_tokens),'--eos','200002,199999,200012']
+        '--context',str(args.context),'--predict',str(args.max_new_tokens),'--eos',stop_ids]
     if args.expert_ptx:
         command+=['--expert-ptx',str(args.expert_ptx.resolve()),'--expert-cache-mib',str(args.expert_cache_mib)]
     if args.fast:
         command+=['--fast-cpu','--prompt-logits','last']
         if args.expert_ptx: command+=['--cpu-expert-workers',str(args.cpu_expert_workers)]
+    renderer=StreamingAnswer(tokenizer,args.thinking) if args.stream else None
+    if args.stream: command+=['--stream']
+    if args.group_hot_experts: command+=['--group-hot-experts']
     print(f'Native GPT-OSS prototype: {len(ids)} prompt tokens. Processing may take several minutes.',flush=True)
-    process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=None,text=True,encoding='utf-8')
-    try: stdout,_=process.communicate()
-    except KeyboardInterrupt:
-        process.terminate();process.wait();raise
-    if process.returncode: raise RuntimeError(f'native engine exited with {process.returncode}')
-    fields=dict(line.split('=',1) for line in stdout.splitlines() if '=' in line)
+    launched=time.perf_counter()
+    process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=None,text=True,encoding='utf-8',bufsize=1)
+    first_visible=None;events=[]
+    def emit(text):
+        nonlocal first_visible
+        if first_visible is None: first_visible=time.perf_counter()
+        print(text,end='',flush=True)
+    try:
+        if args.stream: fields,events=consume_stream(process,renderer,emit)
+        else:
+            stdout,_=process.communicate()
+            if process.returncode: raise RuntimeError(f'native engine exited with {process.returncode}')
+            fields=dict(line.split('=',1) for line in stdout.splitlines() if '=' in line)
+    except BaseException:
+        if process.poll() is None: process.terminate()
+        process.wait();raise
+    finally:
+        process.stdout.close()
     generated=[int(value) for value in fields.get('predicted_token_ids','').split(',') if value]
     raw=tokenizer.decode(generated,skip_special_tokens=False)
-    answer=raw
-    if '<|channel|>final<|message|>' in answer: answer=answer.rsplit('<|channel|>final<|message|>',1)[1]
-    elif args.thinking: answer='[No final channel was reached within the token limit.]'
-    for stop in ('<|return|>','<|endoftext|>','<|call|>'): answer=answer.split(stop,1)[0]
-    print(answer,flush=True)
+    answer=answer_from_raw(raw,args.thinking)
+    if args.stream:
+        if renderer.raw!=raw or renderer.printed!=answer: raise RuntimeError('streamed text differs from final tokenizer decoding')
+        print(flush=True)
+    else: print(answer,flush=True)
     print(f"[engine elapsed: {fields.get('elapsed_seconds','?')} seconds]",flush=True)
     if args.output:
         record={'prototype':True,'prompt_tokens':len(ids),'generated_ids':generated,'raw_output':raw,'answer':answer,'engine_metrics':fields}
+        if args.stream:
+            record['stream']={'first_event_seconds_since_engine_launch':events[0]['received_monotonic']-launched if events else None,
+                'first_visible_seconds_since_engine_launch':first_visible-launched if first_visible is not None else None,
+                'request_to_first_visible_seconds':first_visible-request_begin if first_visible is not None else None,
+                'events':[{**{k:v for k,v in event.items() if k!='received_monotonic'},
+                    'received_seconds_since_engine_launch':event['received_monotonic']-launched} for event in events]}
         args.output.parent.mkdir(parents=True,exist_ok=True)
         args.output.write_text(json.dumps(record,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
 

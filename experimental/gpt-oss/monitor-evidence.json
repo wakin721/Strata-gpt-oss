@@ -1,0 +1,96 @@
+{
+  "date": "2026-10-29",
+  "baseline_source_commit": "492700f",
+  "scope": "Strata monitor compatibility plus startup access/key/context aliases; no native numerical kernel changes",
+  "tests": {
+    "ctest_suites_passed": 12,
+    "ctest_suites_failed": 0,
+    "ctest_log": "build-gpt-oss/api/monitor-ctest.log",
+    "api_integration_cases": 9,
+    "includes_actual_strata_monitor_once_command": true,
+    "shared_profile_test": "Literal values only; startup commands and computed key expressions never execute",
+    "production_model_discovery_tests_passed": 2,
+    "model_discovery_log": "build-gpt-oss/api/magpie-model-test.log"
+  },
+  "installed_client_and_workspace_launcher_smoke": {
+    "port": 6669,
+    "shared_access": "lan",
+    "context": 2048,
+    "reasoning_levels": [
+      "low"
+    ],
+    "active": 0,
+    "model": "gpt-oss-120b-native",
+    "shared_key_present": true,
+    "monitor_cli_passed": true
+  },
+  "smoke_scope": "Temporary API listener used the real downloaded model header/tokenizer and installed Strata monitor, but did not perform inference; its test-owned process tree was closed afterward",
+  "endpoints": [
+    "/v1/telemetry",
+    "/metrics",
+    "/v1/status",
+    "/status"
+  ],
+  "states": [
+    "reading",
+    "generating",
+    "idle"
+  ],
+  "telemetry": [
+    "generated token counter",
+    "measured decode rate",
+    "request duration",
+    "first-token time",
+    "bounded request history",
+    "request activity without prompt bodies",
+    "existing Strata NVML/CPU/RAM/disk sampler"
+  ],
+  "workspace_scripts": [
+    "start_gpt_oss.bat",
+    "start_gpt_oss.ps1",
+    "monitor_gpt_oss.bat",
+    "monitor_gpt_oss.ps1"
+  ],
+  "launcher": {
+    "default_port": 8097,
+    "default_context": 2048,
+    "max_api_context": 4096,
+    "access_modes": [
+      "local",
+      "lan"
+    ],
+    "supports_multiple_api_keys": true,
+    "shared_profile_fields": [
+      "Access",
+      "ApiKey"
+    ],
+    "shared_profile_values_published": false,
+    "key_transport": "temporary environment variable restored when launcher exits"
+  },
+  "magpie_fields": {
+    "supported_reasoning_levels": [
+      {
+        "effort": "low"
+      }
+    ],
+    "modalities": {
+      "input": [
+        "text"
+      ],
+      "output": [
+        "text"
+      ]
+    },
+    "context_length": "configured service context"
+  },
+  "limitations": [
+    "Existing running API processes must restart once to load new endpoints",
+    "Interactive TUI rendering itself was not driven; actual installed monitor snapshot command passed",
+    "No per-token prefill progress or expert-residency slot measurement; missing values remain null",
+    "Hardware readings describe the machine, not exclusive resource use by this process",
+    "Native engine still starts per request; idle API has no resident native model process",
+    "Qwen 256k context, vision, tunnel and full strata launch catalog flags are not supported by this adapter",
+    "No additional inference-speed or writing-quality claim"
+  ],
+  "native_engine_sha256": "17dc17b6f7317678ef6574754119d0a21d8193bddff0f106c473e5626bd48495"
+}

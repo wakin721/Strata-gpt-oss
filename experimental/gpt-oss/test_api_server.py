@@ -1,15 +1,17 @@
 """Exercise real HTTP/SSE and native-process lifetime with a tiny fake engine."""
 from argparse import Namespace
+import argparse
 import http.client
 import json
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
-from api_server import MODEL_ID,NativeBackend,Server,TextStops
+from api_server import MODEL_ID,NativeBackend,Server,TextStops,context_size
 from fetch_expert import write_fixture
 from test_stream_text import tokenizer
 
@@ -90,6 +92,53 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.getheader('Access-Control-Allow-Origin'),'http://localhost:5173');response.read();connection.close()
         connection=self.connection();connection.request('GET','/v1/models',headers={'Origin':'https://elsewhere.example','Authorization':'Bearer secret'})
         response=connection.getresponse();self.assertIsNone(response.getheader('Access-Control-Allow-Origin'));response.read();connection.close()
+    def test_multiple_keys_and_context_units(self):
+        self.http.api_key='first-test, second-test'
+        for key in ('first-test','second-test'):
+            self.assertEqual(self.request(path='/v1/models',headers={'Authorization':'Bearer '+key})[0],200)
+        self.assertEqual(self.request(path='/v1/models',headers={'Authorization':'Bearer first-test, second-test'})[0],401)
+        self.assertEqual(context_size('2k'),2048);self.assertEqual(context_size('4K'),4096)
+        for text in ('0','-1','256k','131072','bad'):
+            with self.assertRaises(argparse.ArgumentTypeError): context_size(text)
+    def test_strata_monitor_snapshot_metrics_and_cli(self):
+        from strata_cli.client import Endpoint
+        endpoint=Endpoint('http://127.0.0.1:'+str(self.http.server_address[1]))
+        first=endpoint.snapshot()
+        self.assertEqual(first['model']['id'],MODEL_ID)
+        self.assertEqual(first['model']['context'],2048)
+        self.assertEqual(first['work']['active'],0)
+        self.assertEqual(self.request(self.body())[0],200);self.wait_idle()
+        snapshot=endpoint.snapshot()
+        self.assertEqual(snapshot['recent'][0]['output_tokens'],len(self.defaults['ids']))
+        self.assertEqual(snapshot['rates']['output_tokens_server_counter'],len(self.defaults['ids']))
+        self.assertEqual(snapshot['totals']['requests'],1)
+        self.assertTrue(snapshot['activity']['available'])
+        metrics=endpoint.get('/metrics')
+        self.assertEqual(metrics['live']['state'],'idle')
+        self.assertIn('hardware',metrics);self.assertIn('hardware_static',metrics)
+        root=Path(__file__).resolve().parents[2]
+        cli=subprocess.run([sys.executable,str(root/'strata.py'),'monitor','--url',endpoint.root,'--once','--json'],
+            capture_output=True,text=True,encoding='utf-8',timeout=15)
+        self.assertEqual(cli.returncode,0,cli.stderr)
+        self.assertEqual(json.loads(cli.stdout)['snapshot']['model']['id'],MODEL_ID)
+    def test_monitor_tracks_prefill_and_decode(self):
+        ack=Path(self.folder.name)/'monitor-ack';self.configure(prefill=.3,ack=str(ack))
+        connection=self.connection();connection.request('POST','/v1/chat/completions',json.dumps(self.body(stream=True)))
+        response=connection.getresponse();self.assertEqual(response.status,200)
+        status,metrics=self.request(path='/metrics')
+        self.assertEqual(status,200);self.assertEqual(metrics['live']['state'],'reading')
+        self.assertIsNone(metrics['live']['prompt_read'])
+        while line:=response.readline():
+            if line.startswith(b'data: ') and line[6:].strip()!=b'[DONE]':
+                item=json.loads(line[6:])
+                if any(choice.get('delta',{}).get('content') for choice in item.get('choices',[])): break
+        status,metrics=self.request(path='/metrics')
+        self.assertEqual(metrics['live']['state'],'generating')
+        self.assertGreaterEqual(metrics['live']['generated'],3)
+        ack.touch();response.read();connection.close();self.wait_idle()
+        status,snapshot=self.request(path='/v1/telemetry')
+        self.assertEqual(snapshot['recent'][0]['finish'],'stop')
+        self.assertEqual(snapshot['work']['active'],0)
     def test_sse_delivers_text_before_engine_may_finish(self):
         ack=Path(self.folder.name)/'ack';self.configure(ack=str(ack))
         connection=self.connection();connection.request('POST','/v1/chat/completions',json.dumps(self.body(stream=True,stream_options={'include_usage':True})))

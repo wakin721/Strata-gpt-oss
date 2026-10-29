@@ -136,7 +136,7 @@ On Windows, double-click `experimental\gpt-oss\start_api.bat`, or use PowerShell
 
 The launcher runs in the foreground. Ctrl+C stops the server and active native
 request. The default port is 8097, separate from released Strata's usual port.
-`-Port`, `-Context`, `-ExpertCacheMiB`, `-CpuExpertWorkers`, and
+`-Port`, `-Context` (`2k`, `4k` or a token count), `-Access local|lan`, `-ExpertCacheMiB`, `-CpuExpertWorkers`, and
 `-GroupHotExperts` customize the launcher; `python experimental/gpt-oss/api_server.py
 --help` lists the remaining options.
 
@@ -181,10 +181,17 @@ $chat = @{
 Invoke-RestMethod -Uri 'http://127.0.0.1:8097/v1/chat/completions' -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($chat))
 ```
 
-Binding is loopback-only. Local browser origins (`localhost`, `127.0.0.1`, `::1`)
-have CORS/preflight support. Optional `-ApiKeyEnv GPT_OSS_API_KEY` reads a bearer
-key from that environment variable without printing or storing it. When selected,
-use the same key in the client. HTTP requests do not log prompt/response bodies.
+Binding defaults to loopback; `-Access lan` listens on all IPv4 interfaces.
+Local browser origins (`localhost`, `127.0.0.1`, `::1`) have CORS/preflight support.
+Optional `-ApiKeyEnv GPT_OSS_API_KEY` reads comma-separated bearer keys from that
+environment variable without printing or storing them. The client sends one of
+those keys. Direct Python invocation also accepts `--api-key`; environment-based
+keys avoid putting credentials in process arguments. HTTP requests do not log bodies.
+
+`-SharedProfile PATH` can reuse literal `$Access` and `$ApiKey` settings from an
+existing Strata PowerShell launcher, such as `start_qwen_iq3.ps1`. It parses the
+AST without executing the script. Computed settings require explicit `-Access`
+or `-ApiKeyEnv`. The port and context remain explicitly configured for GPT-OSS.
 
 The HTTP process, template and tokenizer remain loaded. Each generation starts
 a fresh native process, so expert-cache contents and KV state are not reused
@@ -194,12 +201,55 @@ comments while waiting, then content deltas when text becomes available; the
 role event is not a model first-token timing. A disconnected streaming client or
 request timeout cancels its child process. The API defaults to a 900 s timeout.
 
-Six HTTP integration tests cover buffered/SSE output, a handshake proving text
+Nine HTTP integration tests cover buffered/SSE output, a handshake proving text
 arrives before generation completes, UTF-8 stop strings, length limits, usage,
 auth, local-browser CORS, malformed/unsupported requests, engine failure, timeout, disconnect and
 single-flight release. Real 120B arithmetic API smoke results are recorded in
 `api-evidence.json`. This is basic text-chat compatibility, not the complete
 released Strata API or a claim that Chinese writing quality is fixed.
+
+## Strata monitor and launcher compatibility
+
+The adapter now serves authenticated `/v1/telemetry`, `/metrics`, `/v1/status`
+and `/status`, so the existing Strata monitor reads it directly:
+
+```powershell
+python strata.py monitor --url http://127.0.0.1:8097 --once --json
+```
+
+For the interactive monitor and an imported shared key, use:
+
+```powershell
+.\experimental\gpt-oss\monitor_api.ps1 -SharedProfile ..\start_qwen_iq3.ps1
+```
+
+The user workspace also has `start_gpt_oss.bat` / `.ps1` and
+`monitor_gpt_oss.bat` / `.ps1` shortcuts. They reuse access/key settings from the
+Qwen IQ3 profile, keep GPT-OSS on port 8097, and default to a 2k context. Both
+accept `-Port`; the start script also accepts `-Context 4k` and `-Access local`.
+The monitor uses the installed Strata client and the first configured key.
+Restart an older API process once to load the new endpoints.
+
+The monitor reports reading/generating/idle state, generated tokens, measured
+decode rate, request duration and first-token timing, recent requests, and
+Strata's existing NVML/CPU/RAM/disk sampler. Hardware values describe the machine,
+not exclusive GPU use by this process. Unavailable measurements remain null.
+The native engine does not yet send per-token prefill progress; prompt-read
+percentage and expert-residency slot counts are therefore unavailable. The
+engine still restarts for every API request; idle means the API is ready, with
+no resident native model process. Request/activity records contain no prompt text.
+
+Port, local/LAN access, comma-separated keys, context units, and the monitor
+connection can match the old launcher's workflow. Qwen's 256k context and
+`--vision cpu` cannot be copied: this API is currently capped at 4096 tokens and
+GPT-OSS is text-only. `strata launch --family gpt-oss` is still not a supported
+catalog launch. Tunnel access, native-engine restart management and the other
+production engine switches have not been added to this adapter.
+
+Monitor tests include the actual `strata monitor --once --json` command, live
+prefill/decode transitions, multi-key auth, and bounded context aliases. A separate
+PowerShell test checks that shared-profile parsing executes no launch or computed
+key expression. `monitor-evidence.json` records the installed-client smoke check.
 
 ## Further optimization checks on 2026-10-29
 

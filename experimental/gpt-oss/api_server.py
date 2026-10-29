@@ -1,4 +1,4 @@
-"""Loopback chat-completions/SSE adapter for the experimental native decoder."""
+"""Local/LAN chat-completions/SSE adapter for the experimental native decoder."""
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -17,12 +17,14 @@ from urllib.parse import urlsplit
 import uuid
 from stream_text import StreamingAnswer
 from template_text import compile_template
+from monitoring import Monitor
 
 MODEL_ID='gpt-oss-120b-native'
 
 
 class RequestError(ValueError): pass
 class EngineError(RuntimeError): pass
+class EngineTimeout(EngineError): pass
 
 
 class TextStops:
@@ -58,6 +60,15 @@ def integer(value,name,low,high):
     return value
 
 
+def context_size(text):
+    try:
+        value=int(text[:-1])*1024 if text.lower().endswith('k') else int(text)
+        if not 1<=value<=4096: raise ValueError()
+        return value
+    except ValueError as error:
+        raise argparse.ArgumentTypeError('native API context must be 1..4096 tokens (for example 2k or 4k)') from error
+
+
 class NativeRun:
     def __init__(self,command,timeout,scratch_dir):
         self.stderr=tempfile.TemporaryFile(dir=scratch_dir)
@@ -82,7 +93,7 @@ class NativeRun:
     def events(self):
         while True:
             remaining=self.deadline-time.monotonic()
-            if remaining<=0: raise EngineError('native request timed out')
+            if remaining<=0: raise EngineTimeout('native request timed out')
             try: line=self.lines.get(timeout=min(1,remaining))
             except queue.Empty: yield None;continue
             if line is None: break
@@ -123,6 +134,8 @@ class NativeBackend:
         self.template=compile_template(metadata['tokenizer.chat_template'])
         self.tokenizer=Tokenizer.from_file(str(args.tokenizer/'tokenizer.json'))
         self.vocab=self.tokenizer.get_vocab_size()
+        layers=metadata.get('gpt-oss.block_count');experts=metadata.get('gpt-oss.expert_count')
+        self.total_experts=layers*experts if type(layers) is int and type(experts) is int else None
     def prepare(self,body):
         if not isinstance(body,dict): raise RequestError('request body must be a JSON object')
         if body.get('model',MODEL_ID)!=MODEL_ID: raise RequestError(f'model must be {MODEL_ID}')
@@ -196,7 +209,11 @@ class Server(ThreadingHTTPServer):
     daemon_threads=True
     def __init__(self,address,backend,api_key=None):
         self.backend=backend;self.api_key=api_key
+        self.monitor=Monitor(backend,MODEL_ID)
         super().__init__(address,Handler)
+    def server_close(self):
+        super().server_close()
+        self.monitor.close()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -218,7 +235,8 @@ class Handler(BaseHTTPRequestHandler):
         self._json(status,{'error':{'message':message,'type':'invalid_request_error' if status<500 else 'server_error','code':status}})
     def _authorized(self):
         key=self.server.api_key
-        if key and not hmac.compare_digest(self.headers.get('Authorization','').encode(),('Bearer '+key).encode()):
+        keys=[item.strip() for item in key.split(',') if item.strip()] if key else []
+        if key and not any(hmac.compare_digest(self.headers.get('Authorization','').encode(),('Bearer '+item).encode()) for item in keys):
             self._error(401,'invalid API key');return False
         return True
     def do_GET(self):
@@ -232,7 +250,12 @@ class Handler(BaseHTTPRequestHandler):
                 # effort levels are not yet implemented by this adapter.
                 'supported_reasoning_levels':[{'effort':'low'}]}]})
         elif path in ('','/health'):
-            self._json(200,{'status':'busy' if self.server.backend.gate.locked() else 'ok','model':MODEL_ID})
+            status=self.server.monitor.status()
+            self._json(200,{'status':'busy' if status['busy'] else 'ok','model':MODEL_ID,'service':'strata',
+                'max_context':self.server.backend.args.context,'images':False,'loaded':status['loaded']})
+        elif path=='/v1/telemetry': self._json(200,self.server.monitor.snapshot())
+        elif path=='/metrics': self._json(200,self.server.monitor.metrics())
+        elif path in ('/v1/status','/status'): self._json(200,self.server.monitor.status())
         else: self._error(404,'unknown endpoint')
     def do_OPTIONS(self):
         if urlsplit(self.path).path.rstrip('/') not in ('/v1/models','/v1/chat/completions','/health'):
@@ -257,12 +280,15 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError,TypeError,UnicodeError,TimeoutError) as error:
             self._error(400,str(error));return
         backend=self.server.backend
-        if not backend.gate.acquire(blocking=False): self._error(429,'native engine is busy; retry after the active request finishes');return
-        streaming_started=False
+        if not backend.gate.acquire(blocking=False):
+            with self.server.monitor.lock: self.server.monitor.rejected+=1
+            self._error(429,'native engine is busy; retry after the active request finishes');return
+        streaming_started=False;run=None;outcome='error'
+        request_id=uuid.uuid4().hex[:12];cid='chatcmpl-'+request_id;created=int(time.time())
+        self.server.monitor.begin(request_id,plan)
         try:
             with backend.run(plan) as run:
                 self.connection.settimeout(30)
-                cid='chatcmpl-'+uuid.uuid4().hex;created=int(time.time())
                 def chunk(delta,finish=None):
                     return {'id':cid,'object':'chat.completion.chunk','created':created,'model':MODEL_ID,
                         'choices':[{'index':0,'delta':delta,'finish_reason':finish}]}
@@ -282,12 +308,14 @@ class Handler(BaseHTTPRequestHandler):
                             self.wfile.write(b': waiting\n\n');self.wfile.flush();heartbeat=time.monotonic()
                         continue
                     if event['id']<0 or event['id']>=backend.vocab: raise EngineError('native token outside tokenizer vocabulary')
+                    self.server.monitor.token(event)
                     emit(stopper.feed(renderer.feed(event['id'])))
                     if stopper.matched: run.cancel();break
                 if not stopper.matched:
                     if not run.ids or (not run.eos and len(run.ids)!=plan.predict): raise EngineError('native generation ended unexpectedly')
                     emit(stopper.feed(renderer.finish()));emit(stopper.finish())
                 finish='stop' if run.eos or stopper.matched else 'length'
+                outcome=finish
                 usage={'prompt_tokens':len(plan.ids),'completion_tokens':len(run.ids),'total_tokens':len(plan.ids)+len(run.ids)}
                 if plan.stream:
                     self._sse(chunk({},finish))
@@ -300,14 +328,17 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(200,{'id':cid,'object':'chat.completion','created':created,'model':MODEL_ID,
                         'choices':[{'index':0,'message':{'role':'assistant','content':''.join(parts)},'finish_reason':finish}],
                         'usage':usage,'timings':timings})
-        except (BrokenPipeError,ConnectionResetError,TimeoutError): pass
+        except (BrokenPipeError,ConnectionResetError,TimeoutError): outcome='disconnect'
         except Exception as error:
+            outcome='timeout' if isinstance(error,(EngineTimeout,subprocess.TimeoutExpired)) else 'error'
             try:
                 if streaming_started:
                     self._sse({'error':{'message':str(error),'type':'server_error'}});self._sse('[DONE]')
                 else: self._error(500,str(error))
             except (BrokenPipeError,ConnectionResetError,TimeoutError): pass
-        finally: backend.gate.release()
+        finally:
+            self.server.monitor.finish(outcome,run.fields if run else {})
+            backend.gate.release()
 
 
 def main():
@@ -318,7 +349,8 @@ def main():
     parser.add_argument('--engine',type=Path,default=root/'build-gpt-oss-ninja/experimental/gpt-oss/strata-gpt-oss-cpu.exe')
     parser.add_argument('--expert-ptx',type=Path,default=root/'build-gpt-oss/gpu_expert.ptx')
     parser.add_argument('--port',type=int,default=8097)
-    parser.add_argument('--context',type=int,default=2048)
+    parser.add_argument('--context',type=context_size,default=2048)
+    parser.add_argument('--access',choices=('local','lan'),default='local')
     parser.add_argument('--expert-cache-mib',type=int,default=4096)
     parser.add_argument('--cpu-expert-workers',type=int,default=4)
     parser.add_argument('--request-timeout',type=float,default=900)
@@ -326,7 +358,9 @@ def main():
     parser.add_argument('--group-hot-experts',action='store_true')
     parser.add_argument('--cpu-only',action='store_true')
     parser.add_argument('--scalar',action='store_true')
-    parser.add_argument('--api-key-env',help='Optional environment variable holding the bearer key; key is never printed')
+    auth=parser.add_mutually_exclusive_group()
+    auth.add_argument('--api-key',help='Bearer key(s), comma separated; --api-key-env keeps keys out of process arguments')
+    auth.add_argument('--api-key-env',help='Optional environment variable holding bearer key(s); keys are never printed')
     args=parser.parse_args()
     if args.cpu_only: args.expert_ptx=None
     if not 1<=args.port<=65535 or not 1<=args.cpu_expert_workers<=16 or not 1<=args.expert_cache_mib<=1048576:
@@ -334,10 +368,14 @@ def main():
     if not math.isfinite(args.request_timeout) or args.request_timeout<=0: parser.error('request timeout must be positive')
     for path in [args.engine,args.model,args.tokenizer/'tokenizer.json',*([args.expert_ptx] if args.expert_ptx else [])]:
         if not path.is_file(): parser.error(f'file not found: {path}')
-    key=os.environ.get(args.api_key_env) if args.api_key_env else None
-    if args.api_key_env and not key: parser.error('API key environment variable is empty')
-    backend=NativeBackend(args);server=Server(('127.0.0.1',args.port),backend,key)
-    print(f'GPT-OSS experimental API ready: http://127.0.0.1:{args.port}/v1; model={MODEL_ID}; temperature=0',flush=True)
+    key=os.environ.get(args.api_key_env) if args.api_key_env else args.api_key
+    if (args.api_key_env or key is not None) and not any(x.strip() for x in (key or '').split(',')):
+        parser.error('API key setting is empty')
+    backend=NativeBackend(args);server=Server(('0.0.0.0' if args.access=='lan' else '127.0.0.1',args.port),backend,key)
+    print(f'GPT-OSS experimental API ready: http://127.0.0.1:{args.port}/v1; model={MODEL_ID}; temperature=0; access={args.access}',flush=True)
+    monitor_script=root/'strata.py'
+    credential_option=f' --credential-env "{args.api_key_env}"' if args.api_key_env else ''
+    print(f'Monitor: python "{monitor_script}" monitor --url http://127.0.0.1:{args.port}{credential_option}',flush=True)
     try: server.serve_forever(poll_interval=.2)
     except KeyboardInterrupt: pass
     finally: backend.cancel();server.server_close()

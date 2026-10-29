@@ -209,13 +209,16 @@ Decoder::Decoder(Loader& loader,std::size_t max_context,MixtureRunner runner) : 
         caches_.emplace_back(config.sliding[layer] ? (std::min)(config.window,max_context) : max_context,config.kv_heads*config.head_dim);
     }
 }
-std::vector<float> Decoder::forward(std::size_t token) {
+std::vector<float> Decoder::forward(std::size_t token,const BlockObserver& observer) {
     require(token<config.vocab,"GPT-OSS: token ID outside vocabulary");
     require(position_<max_context_,"GPT-OSS: context capacity exceeded");
     try {
         std::vector<float> state(config.embedding);
         decode_row(embedding_,token,state);
-        for(std::size_t i=0;i<blocks_.size();++i) state=blocks_[i].step(state,caches_[i],position_,runner_);
+        for(std::size_t i=0;i<blocks_.size();++i) {
+            state=blocks_[i].step(state,caches_[i],position_,runner_);
+            if(observer) observer(i,state);
+        }
         auto normalized=norm(state,output_norm_,config.epsilon);
         std::vector<float> logits(config.vocab); matvec(output_,normalized,logits);
         for(float x:logits) require(std::isfinite(x),"GPT-OSS: non-finite logits");

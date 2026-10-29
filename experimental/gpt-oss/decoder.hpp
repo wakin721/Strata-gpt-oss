@@ -17,6 +17,7 @@ struct AttentionWeights {
 };
 struct Routes { std::vector<std::size_t> ids; std::vector<float> weights; };
 using MixtureRunner = std::function<std::vector<float>(std::size_t,const Routes&,std::span<const float>)>;
+using BlockObserver = std::function<void(std::size_t,std::span<const float>)>;
 Routes route(std::span<const float> logits, std::size_t top_k);
 void rope(std::span<float> values, std::size_t heads, const Config& config, std::size_t position);
 
@@ -53,7 +54,7 @@ public:
     Decoder& operator=(const Decoder&) = delete;
     Decoder(Decoder&&) = delete;
     Decoder& operator=(Decoder&&) = delete;
-    std::vector<float> forward(std::size_t token);
+    std::vector<float> forward(std::size_t token,const BlockObserver& observer = {});
     void reset();
     const Config config;
     std::size_t position() const { return position_; }

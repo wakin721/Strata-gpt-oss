@@ -6,6 +6,7 @@
 #include <charconv>
 #include <chrono>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -32,9 +33,10 @@ std::vector<std::size_t> tokens(const std::string& text) {
 }
 int main(int argc,char** argv) {
     try {
-        std::string model, token_list, output, expert_ptx;
+        std::string model, token_list, output, expert_ptx, trace_dir;
         std::size_t predict=0,context=256;
         std::size_t cache_mib=64;
+        std::vector<std::size_t> stop_ids;
         bool reset_check=false;
         for(int i=1;i<argc;++i) {
             const std::string key=argv[i];
@@ -42,6 +44,7 @@ int main(int argc,char** argv) {
                 std::cout << "Experimental native CPU token-ID decoder. No tokenizer or chat API.\n"
                     "--model FILE --tokens 1,2,3 [--predict N] [--context N] [--logits-out FILE] [--reset-check]\n"
                     "Windows GPU experts: --expert-ptx FILE --expert-cache-mib N (attention remains on CPU).\n"
+                    "Optional: --eos ID,ID stops generation; --trace-dir DIR writes per-layer F32 state.\n"
                     "Logits: little-endian float32, one vocab-sized record for every evaluated token.\n";
                 return 0;
             }
@@ -55,6 +58,8 @@ int main(int argc,char** argv) {
             else if(key=="--logits-out") output=value;
             else if(key=="--expert-ptx") expert_ptx=value;
             else if(key=="--expert-cache-mib") cache_mib=number(value);
+            else if(key=="--trace-dir") trace_dir=value;
+            else if(key=="--eos") stop_ids=tokens(value);
             else throw std::invalid_argument("unknown argument: "+key);
         }
         if(model.empty() || token_list.empty()) throw std::invalid_argument("--model and --tokens are required");
@@ -81,8 +86,16 @@ int main(int argc,char** argv) {
         }
         std::vector<float> logits,first;
         std::size_t records=0;
+        if(!trace_dir.empty()) std::filesystem::create_directories(trace_dir);
         auto forward=[&](std::size_t token) {
-            logits=decoder.forward(token); ++records;
+            go::BlockObserver observer;
+            if(!trace_dir.empty()) observer=[&](std::size_t layer,std::span<const float> state) {
+                const auto path=std::filesystem::path(trace_dir)/(std::to_string(records)+"-l_out-"+std::to_string(layer)+".f32");
+                std::ofstream trace(path,std::ios::binary);
+                trace.write(reinterpret_cast<const char*>(state.data()),state.size_bytes());
+                if(!trace) throw std::runtime_error("cannot write layer trace");
+            };
+            logits=decoder.forward(token,observer); ++records;
             if(file.is_open()) {
                 file.write(reinterpret_cast<const char*>(logits.data()),static_cast<std::streamsize>(logits.size()*sizeof(float)));
                 if(!file) throw std::runtime_error("writing logits failed");
@@ -99,6 +112,7 @@ int main(int argc,char** argv) {
             const auto next=static_cast<std::size_t>(std::max_element(logits.begin(),logits.end())-logits.begin());
             if(i) std::cout << ',';
             std::cout << next;
+            if(std::find(stop_ids.begin(),stop_ids.end(),next)!=stop_ids.end()) break;
             if(i+1<predict) forward(next);
         }
         std::cout << "\nlogit_records=" << records << "\nlast_argmax=" << (std::max_element(logits.begin(),logits.end())-logits.begin())

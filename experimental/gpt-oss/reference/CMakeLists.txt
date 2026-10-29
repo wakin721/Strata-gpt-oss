@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.24)
+project(gpt_oss_reference LANGUAGES CXX)
+if(NOT WIN32)
+  message(FATAL_ERROR "This reference driver currently links a Windows static llama.cpp build")
+endif()
+set(CMAKE_CXX_STANDARD 20)
+set(LLAMA_SOURCE "" CACHE PATH "Unmodified llama.cpp source")
+set(LLAMA_BUILD "" CACHE PATH "CPU static llama.cpp build")
+add_executable(gpt-oss-reference reference_logits.cpp)
+if(MSVC)
+  target_compile_options(gpt-oss-reference PRIVATE /utf-8)
+endif()
+target_include_directories(gpt-oss-reference PRIVATE ${LLAMA_SOURCE}/include ${LLAMA_SOURCE}/ggml/include)
+target_link_libraries(gpt-oss-reference PRIVATE
+  ${LLAMA_BUILD}/src/llama.lib ${LLAMA_BUILD}/ggml/src/ggml.lib
+  ${LLAMA_BUILD}/ggml/src/ggml-cpu.lib ${LLAMA_BUILD}/ggml/src/ggml-base.lib)

@@ -188,6 +188,10 @@ class DecoderTests(unittest.TestCase):
             self.assertIn('predicted_token_ids='+','.join(map(str,expected)),result.stdout)
             actual=np.fromfile(out,dtype='<f4').reshape(6,-1)
             np.testing.assert_allclose(actual,reference(ids[:-1],meta,w),atol=8e-5,rtol=8e-5)
+            stopped=self.run_cpu(path,[2,3,5],Path(folder)/'stopped.bin',('--predict','4','--eos',str(expected[0])))
+            self.assertEqual(stopped.returncode,0,stopped.stderr)
+            self.assertIn('predicted_token_ids='+str(expected[0])+'\n',stopped.stdout)
+            self.assertIn('logit_records=3',stopped.stdout)
             # Invalid input and an oversized generation must fail before any output file is created.
             for bad_ids,extra in (([11],()),([0],('--context','0')),([0],('--predict','300'))):
                 bad=Path(folder)/'bad.bin'

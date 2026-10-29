@@ -4,11 +4,12 @@ This development branch has a native token-ID decoder, a single-expert probe,
 and a Windows CUDA expert cache with CPU/GPU expert work in parallel.
 It does not launch llama-server or Ollama.
 
-**It is not a usable GPT-OSS chat deployment yet.** Complete small synthetic models
-can evaluate token IDs and generate greedy token IDs. The real 120B model has been
-tested only as one block on one fixed synthetic activation. A full 120B forward
-pass, tokenizer/Harmony conversation handling, and service integration are untested
-or absent. It is not in the model catalog and is never selected by the released engine.
+**It is not a production GPT-OSS chat deployment.** The full downloaded 120B model
+now completes short native forward passes and a template-based arithmetic text
+probe. A Python wrapper renders the GGUF's own Harmony template and handles text
+encoding/decoding. Broad output quality, long-context full-model parity, service
+integration and throughput remain unvalidated. It is not in the model catalog
+and is never selected by the released engine.
 
 The normal build path is unchanged when `STRATA_GPT_OSS_PROTOTYPE_ONLY` is OFF
 (the default). With it ON, CMake builds only these prototypes and their optional tests.
@@ -62,7 +63,51 @@ over selected logits, expert bias/clamped SwiGLU, residuals and output projectio
 The sliding KV cache is a ring; global layers retain the requested context.
 Logits output is little-endian F32, one vocabulary-sized record per evaluated token.
 An existing logits output is refused. This command does not encode text or apply
-Harmony, and there is no claim that the complete public 120B model has passed it.
+Harmony. Use the Python text probe below for a template-based one-shot test.
+
+## One-shot text probe
+
+Python needs the locally installed `tokenizers` and `transformers` packages. The
+wrapper uses the template stored in the GGUF, the downloaded tokenizer and the
+client date in Asia/Taipei. The computation stays in `strata-gpt-oss-cpu`.
+
+```bat
+python experimental\gpt-oss\run_prompt.py --model ..\strata_data\models\gpt-oss-120b-MXFP4\gpt-oss-120b-MXFP4.gguf --tokenizer ..\strata_data\models\gpt-oss-120b-MXFP4\tokenizer --engine build-gpt-oss-ninja\experimental\gpt-oss\strata-gpt-oss-cpu.exe --expert-ptx build-gpt-oss\gpu_expert.ptx --prompt "2+2?" --system "You are ChatGPT. Answer with just the number." --max-new-tokens 8 --context 128
+```
+
+The default explicitly requests the final channel; `--thinking` allows analysis
+before final but may need a larger token budget. Generation stops at the model's
+terminal token IDs. This is a diagnostic command: input processing is currently
+sequential and can take minutes, and output is displayed after generation.
+It has no conversation loop, tool execution, streaming API or background service.
+An optional `--output FILE.json` saves the explicit prompt's test result locally.
+
+## Full-model checks on 2026-10-29
+
+The downloaded GGUF is `63,387,346,208` bytes. The downloader recorded successful
+SHA-256 verification against `582bd40f6886200101f4c4ed9f25f3fe80cc14c86e9e2b37746cd8904a0c622d`.
+All four official tokenizer/config files were also rehashed against their saved
+provenance. The native reader recognized all 36 layers and 128 experts per layer.
+
+- CPU-only `Hello` forward: all 201,088 logits are finite; the top token is `,`.
+  Native execution took 5.95 seconds in the traced run.
+- A deliberately short handcrafted Harmony arithmetic prompt produced incorrect
+  text (`2 + ...`). This is retained as a failed diagnostic, not quality evidence.
+- On that same prompt, the unmodified local llama.cpp reference and the native
+  hybrid path agree on the top token at all 13 teacher-forced positions. Their
+  logits are not numerically identical: for `Hello`, relative L2 differs by about
+  2.9%. The GGML quantized activation-dot path differs from this prototype's
+  FP32 decoded-weight dot path. This does not establish exact logits parity.
+- Using the GGUF's actual chat template, a 92-token arithmetic prompt produces
+  `4.`. Native mixed execution evaluated 93 positions (prompt plus the first
+  generated token) in 287.08 seconds, with a 4,294,218,240-byte expert cache,
+  5,737 GPU expert calls and 7,655 CPU expert calls. This single run is a smoke
+  test, not a general throughput or answer-quality benchmark.
+
+`full-model-evidence.json` records these results. `reference/` supplies a small
+diagnostic driver that links a separately built, unmodified local llama.cpp CPU
+library. It is not used by the native decoder. `--trace-dir DIR` on the native
+token-ID tool writes per-layer states for first-divergence investigation.
 
 ## GPU experts and CPU/GPU overlap (Windows)
 
@@ -180,13 +225,13 @@ No generation-speed or quality claim is made.
 
 ## Next native work
 
-1. Validate complete public-model teacher-forced logits at several lengths, not
-   just miniature models and a selected-expert real block.
+1. Extend complete public-model parity beyond the short diagnostic sequence;
+   investigate quantized activation-dot differences and longer contexts.
 2. Add persistent CPU workers, optimized vectorized quantized dots, GPU dense
    projections/attention and KV placement. Measure cache eviction and long runs.
 3. Compare real throughput/memory with a same-hardware optimized baseline before
    claiming a speed improvement or enabling a model catalog entry.
-4. Add Harmony encoding, streaming and API tests. Choose speculation separately;
+4. Extend the one-shot Harmony wrapper to validated streaming and API handling. Choose speculation separately;
    Qwen's embedded MTP head cannot be reused for GPT-OSS.
 
 The existing `model_family_runs` guard intentionally still rejects GPT-OSS.

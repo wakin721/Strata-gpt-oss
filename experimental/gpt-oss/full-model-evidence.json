@@ -1,0 +1,51 @@
+{
+  "date": "2026-10-29",
+  "download": {
+    "size_bytes": 63387346208,
+    "sha256": "582bd40f6886200101f4c4ed9f25f3fe80cc14c86e9e2b37746cd8904a0c622d",
+    "sha256_verified_by_download": true
+  },
+  "full_model_geometry": {
+    "layers": 36,
+    "experts_per_layer": 128,
+    "embedding": 2880,
+    "vocab": 201088
+  },
+  "hello_cpu": {
+    "top_token": 11,
+    "seconds": 5.94872,
+    "max_absolute_logit_difference_vs_llama_cpp": 0.607848048210144,
+    "relative_l2_vs_llama_cpp": 0.02921871840953827
+  },
+  "short_handcrafted_harmony_prompt": {
+    "scope": "diagnostic only; not the GGUF template",
+    "prompt_tokens": 13,
+    "generated_tokens": 4,
+    "generated_text": "2 + ...<|end|>",
+    "correct_arithmetic_answer": false,
+    "reference_prompt_top1_matches": 13,
+    "reference_prompt_positions": 13,
+    "hybrid_elapsed_seconds": 58.2457,
+    "gpu_expert_calls": 1091,
+    "cpu_expert_calls": 1213,
+    "expert_cache_bytes": 4294218240
+  },
+  "reference": "unmodified local llama.cpp CPU static library, no extra buffer repacking, F32 KV; Q8/MXFP4 activation-dot paths differ from this FP32 reference prototype",
+  "chat_deployment_validated": false,
+  "standard_template_test": {
+    "prompt_tokens": 92,
+    "evaluated_positions": 93,
+    "generated_ids": [
+      19,
+      13
+    ],
+    "output": "4.",
+    "elapsed_seconds": 287.08,
+    "gpu_expert_calls": 5737,
+    "cpu_expert_calls": 7655,
+    "expert_cache_bytes": 4294218240,
+    "scope": "One short arithmetic smoke test using GGUF chat template and explicit final-channel prefix"
+  },
+  "basic_full_model_text_probe_passed": true,
+  "tokenizer_files_rehashed": 4
+}

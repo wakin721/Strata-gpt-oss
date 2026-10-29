@@ -13,7 +13,8 @@ import time
 import unittest
 from api_server import MODEL_ID,NativeBackend,Server,TextStops,context_size
 from fetch_expert import write_fixture
-from test_stream_text import tokenizer
+from test_stream_text import tokenizer,TOOL
+from template_text import compile_template
 
 FAKE='''import argparse,json,sys,time
 from pathlib import Path
@@ -76,7 +77,7 @@ class ApiTests(unittest.TestCase):
         model=data['data'][0]
         self.assertEqual(model['context_length'],self.backend.args.context)
         self.assertEqual(model['modalities'],{'input':['text'],'output':['text']})
-        self.assertEqual(model['supported_reasoning_levels'],[{'effort':'low'}])
+        self.assertEqual(model['supported_reasoning_levels'],[{'effort':x} for x in ('low','medium','high')])
         self.http.api_key='secret'
         self.assertEqual(self.request(path='/v1/models')[0],401)
         self.assertEqual(self.request(path='/v1/models',headers={'Authorization':'Bearer secret'})[0],200)
@@ -203,6 +204,92 @@ class ApiTests(unittest.TestCase):
             {'stream_options':[]},{'model':'other'},{'tools':[{}]},{'max_tokens':True},{'messages':[]},
             {'messages':[{'role':'user','content':[{'type':'image_url','image_url':'x'}]}]},
             {'max_tokens':2048},{'max_tokens':2,'max_completion_tokens':3}):
+            status,data=self.request(self.body(**change));self.assertEqual(status,400,(change,data));self.assertIsNone(self.backend.active)
+    def harmony_output(self,text,eos='<|return|>'):
+        self.configure(ids=self.backend.tokenizer.encode(text,add_special_tokens=False).ids,
+            eos=self.backend.tokenizer.token_to_id(eos))
+    def test_each_reasoning_level_reaches_template_and_sse(self):
+        self.backend.template=compile_template('Reasoning: {{ reasoning_effort }}{% for m in messages %}{{ m.content }}{% endfor %}<|start|>assistant')
+        for level in ('low','medium','high'):
+            body=self.body(reasoning_effort=level,max_tokens=200)
+            plan=self.backend.prepare(body)
+            prompt=self.backend.tokenizer.decode(plan.ids,skip_special_tokens=False)
+            self.assertIn('Reasoning: '+level,prompt);self.assertTrue(prompt.endswith('<|start|>assistant'))
+            with self.backend.run(plan) as run:
+                self.assertEqual(run.process.args[run.process.args.index('--eos')+1],'200002,199999,200012')
+                list(run.events())
+            self.harmony_output('<|channel|>analysis<|message|>想🙂<|end|><|start|>assistant<|channel|>final<|message|>好<|return|>')
+            status,data=self.request(body);self.assertEqual(status,200,data)
+            self.assertEqual(data['choices'][0]['message'],{'role':'assistant','content':'好','reasoning_content':'想🙂'})
+            self.wait_idle()
+        connection=self.connection();connection.request('POST','/v1/chat/completions',
+            json.dumps(self.body(reasoning={'effort':'high'},stream=True,max_tokens=200)))
+        response=connection.getresponse();self.assertEqual(response.status,200)
+        wire=response.read().decode();connection.close()
+        chunks=[json.loads(line[6:]) for line in wire.splitlines() if line.startswith('data: ') and line!='data: [DONE]']
+        deltas=[c['delta'] for x in chunks for c in x['choices']]
+        self.assertEqual(''.join(d.get('reasoning_content','') for d in deltas),'想🙂')
+        self.assertEqual(''.join(d.get('content','') for d in deltas),'好')
+        self.assertNotIn('<|',wire);self.wait_idle()
+        self.harmony_output('<|channel|>final<|message|>好<|end|><|start|>user<|message|>must not leak')
+        status,data=self.request(self.body(reasoning_effort='low',max_tokens=200))
+        self.assertEqual(status,200,data);self.assertEqual(data['choices'][0]['message']['content'],'好')
+        self.assertEqual(data['choices'][0]['finish_reason'],'stop');self.wait_idle()
+        self.harmony_output('<|channel|>analysis<|message|>thinking')
+        status,data=self.request(self.body(reasoning_effort='high',max_tokens=3))
+        self.assertEqual(status,200,data);self.assertEqual(data['choices'][0]['finish_reason'],'length');self.wait_idle()
+    def test_tools_roundtrip_prompt_and_forced_choices(self):
+        # This fixture exposes normalized inputs; the real GGUF template is also
+        # exercised in the separate full-model smoke, without requiring 63 GB here.
+        self.backend.template=compile_template('{{ reasoning_effort }} {{ tools|tojson }} {{ messages|tojson }}<|start|>assistant')
+        raw='<|channel|>analysis<|message|>查<|end|><|start|>assistant to=functions.weather<|channel|>commentary json<|message|>{"city":"台北"}<|call|>'
+        self.harmony_output(raw,'<|call|>')
+        body=self.body(tools=[TOOL],max_tokens=250)
+        status,data=self.request(body);self.assertEqual(status,200,data)
+        choice=data['choices'][0];message=choice['message'];self.assertEqual(choice['finish_reason'],'tool_calls')
+        self.assertIsNone(message['content']);self.assertEqual(message['reasoning_content'],'查')
+        call=message['tool_calls'][0];self.assertEqual(json.loads(call['function']['arguments']),{'city':'台北'})
+        self.wait_idle()
+        _,telemetry=self.request(path='/v1/telemetry')
+        self.assertEqual(telemetry['activity']['events'][-1]['event'],'finished')
+        self.assertEqual(telemetry['activity']['events'][-1]['outcome'],'tool_calls')
+        history=body['messages']+[message,{'role':'tool','tool_call_id':call['id'],'content':'下雨🙂'}]
+        follow=self.body(messages=history,tools=[TOOL],max_tokens=150)
+        plan=self.backend.prepare(follow);prompt=self.backend.tokenizer.decode(plan.ids,skip_special_tokens=False)
+        self.assertIn('"arguments": {"city":',prompt);self.assertNotIn('\\"city\\"',prompt)
+        self.harmony_output('<|channel|>final<|message|>下雨，带伞。<|return|>')
+        status,data=self.request(follow);self.assertEqual(status,200,data)
+        self.assertEqual(data['choices'][0]['message']['content'],'下雨，带伞。');self.wait_idle()
+        for selection,suffix in [('required','assistant to=functions.'),
+            ({'type':'function','function':{'name':'weather'}},'assistant to=functions.weather<|channel|>commentary json<|message|>')]:
+            plan=self.backend.prepare(self.body(tools=[TOOL],tool_choice=selection,max_tokens=64))
+            self.assertTrue(self.backend.tokenizer.decode(plan.ids,skip_special_tokens=False).endswith(suffix))
+        plan=self.backend.prepare(self.body(tools=[TOOL],tool_choice='none'))
+        self.assertFalse(plan.harmony);self.assertEqual(plan.validators,{})
+    def test_tool_sse_and_truncation_and_invalid_arguments(self):
+        self.harmony_output('{"city":"台北🙂"}<|call|>','<|call|>')
+        body=self.body(tools=[TOOL],tool_choice={'type':'function','function':{'name':'weather'}},
+            max_tokens=64,stream=True,stop='city',stream_options={'include_usage':True})
+        connection=self.connection();connection.request('POST','/v1/chat/completions',json.dumps(body))
+        response=connection.getresponse();self.assertEqual(response.status,200)
+        wire=response.read().decode();connection.close()
+        chunks=[json.loads(line[6:]) for line in wire.splitlines() if line.startswith('data: ') and line!='data: [DONE]']
+        deltas=[c['delta'] for x in chunks for c in x['choices']]
+        calls=[c for d in deltas for c in d.get('tool_calls',[])]
+        self.assertEqual(calls[0]['function']['name'],'weather')
+        self.assertEqual(''.join(c['function'].get('arguments','') for c in calls),'{"city":"台北🙂"}')
+        self.assertEqual([c['finish_reason'] for x in chunks for c in x['choices']][-1],'tool_calls')
+        self.assertIn('data: [DONE]',wire);self.assertNotIn('<|',wire);self.wait_idle()
+        body={**body,'stream':False,'max_tokens':3}
+        status,data=self.request(body);self.assertEqual(status,200,data)
+        self.assertEqual(data['choices'][0]['finish_reason'],'length');self.wait_idle()
+        self.harmony_output('{"city":123}<|call|>','<|call|>')
+        status,data=self.request({**body,'max_tokens':64});self.assertEqual(status,500,data);self.wait_idle()
+    def test_bad_tool_requests_are_rejected_before_native_start(self):
+        for change in ({'tools':{}},{'tools':[TOOL],'tool_choice':{'type':'function','function':{'name':'missing'}}},
+            {'tool_choice':'required'},{'reasoning_effort':'ultra'},{'reasoning_effort':'low','reasoning':{'effort':'high'}},
+            {'messages':[{'role':'tool','tool_call_id':'missing','content':'x'}]},
+            {'tools':[{'type':'function','function':{'name':'x','parameters':{'type':'object','$ref':'https://example.invalid/schema'}}}]}):
             status,data=self.request(self.body(**change));self.assertEqual(status,400,(change,data));self.assertIsNone(self.backend.active)
     def test_failure_timeout_and_disconnect_release_single_flight(self):
         self.configure(fail=True)

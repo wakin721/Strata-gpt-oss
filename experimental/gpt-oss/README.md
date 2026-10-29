@@ -127,6 +127,7 @@ needed before the first token, or imply a higher inference throughput.
 ## Local chat API
 
 Start from the source checkout, using the existing downloaded model and build:
+Python needs `tokenizers`, `jinja2`, `jsonschema` and `referencing`.
 
 On Windows, double-click `experimental\gpt-oss\start_api.bat`, or use PowerShell:
 
@@ -152,18 +153,19 @@ For a client that supports an OpenAI-compatible chat-completions endpoint:
 | Streaming | Enabled (`stream: true`) |
 
 The adapter has `GET /health`, `GET /v1/models`, and
-`POST /v1/chat/completions`. It accepts text-only system/developer/user/assistant
+`POST /v1/chat/completions`. It accepts text-only system/developer/user/assistant/tool
 history, `max_tokens` or `max_completion_tokens`, up to four stop strings,
 ordinary JSON responses, and SSE `chat.completion.chunk` events ending in
 `[DONE]`. `stream_options.include_usage` requests a final usage event. Native
 token bytes use the same incremental UTF-8/final-message decoder as the terminal.
 Model discovery includes Magpie's `supported_reasoning_levels`, `modalities.input`
-and `context_length` fields. This adapter reports only `[{"effort":"low"}]`, text
-input/output and the configured service context, matching the path actually
-implemented here rather than advertising unsupported model settings.
+and `context_length` fields. The reasoning list is
+`[{"effort":"low"},{"effort":"medium"},{"effort":"high"}]`, with text input/output
+and the configured service context. Restart an older server and refresh the
+client's model list to pick up these fields.
 
 The native decoder currently samples greedily. Explicit requests for other
-temperatures, nontrivial sampling filters/penalties, tools, images, logprobs or
+temperatures, nontrivial sampling filters/penalties, images, logprobs or
 structured output return 400 instead of silently ignoring those features.
 Only one native request runs at a time; concurrent requests receive 429.
 The bundled API defaults to 2048 tokens. Its maximum comes from the loaded GGUF:
@@ -202,12 +204,81 @@ comments while waiting, then content deltas when text becomes available; the
 role event is not a model first-token timing. A disconnected streaming client or
 request timeout cancels its child process. The API defaults to a 900 s timeout.
 
-Eleven HTTP integration tests cover buffered/SSE output, a handshake proving text
+Fifteen HTTP integration tests cover buffered/SSE output, a handshake proving text
 arrives before generation completes, UTF-8 stop strings, length limits, usage,
 auth, local-browser CORS, malformed/unsupported requests, engine failure, timeout, disconnect and
-single-flight release. Real 120B arithmetic API smoke results are recorded in
-`api-evidence.json`. This is basic text-chat compatibility, not the complete
+single-flight release, reasoning levels, and tool-call/result round trips.
+Eight text/protocol tests also cover split UTF-8, Harmony headers, schema
+validation and truncated calls. Real 120B arithmetic API smoke results are recorded in
+`api-evidence.json`. This is experimental chat compatibility, not the complete
 released Strata API or a claim that Chinese writing quality is fixed.
+
+### Reasoning effort and function tools
+
+Set `reasoning_effort` to `low`, `medium` or `high`. Each value goes into the
+GGUF template's `Reasoning:` instruction. Analysis is returned separately in
+`message.reasoning_content` or SSE `delta.reasoning_content`; final text remains
+in `content`. `reasoning: {"effort":"high"}` is accepted as an alias. Conflicting
+values return 400. The output token budget includes analysis and Harmony headers:
+a short budget may end with `finish_reason: "length"` before any final text.
+
+For compatibility, plain requests with no explicit effort and no available tools
+keep the previous low/forced-final path. `reasoning_effort: "none"` also uses
+that shortcut for text requests. With tools it uses native low effort and hides
+analysis; it is not an additional native effort level. Reasoning levels instruct
+the model, rather than setting a fixed number of reasoning tokens.
+
+Modern OpenAI function `tools` and `tool_choice` (`auto`, `none`, `required`, or
+a named function) are supported. For example:
+
+```json
+{
+  "model": "gpt-oss-120b-native",
+  "messages": [{"role":"user","content":"Get the current time."}],
+  "temperature": 0,
+  "reasoning_effort": "low",
+  "max_completion_tokens": 256,
+  "stream": true,
+  "tools": [{"type":"function","function":{
+    "name":"clock",
+    "description":"Get the current time.",
+    "parameters":{"type":"object","properties":{},"additionalProperties":false},
+    "strict":true
+  }}],
+  "tool_choice": "auto"
+}
+```
+
+Calls arrive as `message.tool_calls` or incremental `delta.tool_calls`, with
+JSON argument strings and `finish_reason: "tool_calls"`. The server returns
+calls to the client; it does not execute them. The client executes a call, then
+sends the assistant message and a `role: "tool"` message with the matching
+`tool_call_id` and text `content` in the next request. Tool history arguments
+are decoded to objects before templating, avoiding double JSON encoding.
+
+The downloaded template supports one call per assistant turn. Multiple tools
+can be offered, but calls are sequential even if `parallel_tool_calls` is true.
+Unmatched result IDs and parallel calls in a history message return 400.
+`tool_choice: "none"` omits definitions for the next generation; named/required
+choices seed the corresponding Harmony recipient header.
+
+Completed call arguments must be JSON objects matching the offered schema.
+`strict` uses validation after generation, without constrained decoding: invalid
+calls cause a server error (an SSE error after any emitted fragments), and a
+truncated call finishes with `length`. Clients must wait for a successful
+`tool_calls` finish before execution. Schema references are local fragments
+only; schema URL/file retrieval is disabled. Legacy `functions`/`function_call`
+and structured response formats remain unsupported.
+
+`tools-reasoning-evidence.json` records the 2026-10-29 checks on the downloaded
+120B model. A high-effort request returned separate analysis and final text `2`.
+A named `clock` call returned `{}` and `finish_reason: "tool_calls"` when its
+prompt explicitly requested an empty argument object. An earlier short prompt
+used all 32 output tokens without completing valid arguments. These are smoke
+tests; automatic tool selection and general call reliability remain unvalidated.
+After the client supplied `12:34 UTC` as the tool result, the native model
+completed a final answer containing that time. The test did not execute a real
+clock tool: the client supplied a fixed result to verify the round trip.
 
 ## Strata monitor and launcher compatibility
 

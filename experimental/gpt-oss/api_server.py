@@ -18,6 +18,8 @@ import uuid
 from stream_text import StreamingAnswer
 from template_text import compile_template
 from monitoring import Monitor
+from chat_protocol import LEVELS,prepare_tools,prepare_messages,reasoning
+from harmony import HarmonyAnswer
 
 MODEL_ID='gpt-oss-120b-native'
 
@@ -53,6 +55,10 @@ class Plan:
     stream:bool
     stops:list
     include_usage:bool
+    harmony:bool=False
+    header:str='assistant'
+    validators:dict=None
+    expose_reasoning:bool=True
 
 
 def integer(value,name,low,high):
@@ -140,20 +146,11 @@ class NativeBackend:
     def prepare(self,body):
         if not isinstance(body,dict): raise RequestError('request body must be a JSON object')
         if body.get('model',MODEL_ID)!=MODEL_ID: raise RequestError(f'model must be {MODEL_ID}')
-        messages=body.get('messages')
-        if not isinstance(messages,list) or not messages or len(messages)>256: raise RequestError('messages must contain 1..256 text messages')
-        clean=[]
-        for message in messages:
-            if not isinstance(message,dict) or message.get('role') not in ('system','developer','user','assistant'):
-                raise RequestError('supported roles: system, developer, user, assistant')
-            if message.get('tool_calls') or message.get('function_call'): raise RequestError('tool calls are not supported by this prototype')
-            content=message.get('content')
-            if isinstance(content,list):
-                if not all(isinstance(part,dict) and part.get('type')=='text' and isinstance(part.get('text'),str) for part in content):
-                    raise RequestError('only text content parts are supported')
-                content=''.join(part['text'] for part in content)
-            if not isinstance(content,str): raise RequestError('message content must be text')
-            clean.append({'role':message['role'],'content':content})
+        try:
+            clean=prepare_messages(body.get('messages'))
+            tools,validators,prefix=prepare_tools(body)
+            effort,explicit=reasoning(body)
+        except Exception as error: raise RequestError(f'invalid chat input: {error}') from error
         # Never silently pretend to apply sampling/features absent in the native
         # decoder. Clients can select greedy decoding with temperature=0.
         for key,expected in {'temperature':0,'top_p':1,'top_k':0,'frequency_penalty':0,'presence_penalty':0,'repetition_penalty':1,'min_p':0}.items():
@@ -161,11 +158,9 @@ class NativeBackend:
             if isinstance(value,bool) or not isinstance(value,(int,float)) or value!=expected or not math.isfinite(value):
                 raise RequestError(f'this native prototype requires {key}={expected}')
         integer(body.get('n',1),'n',1,1)
-        for key in ('tools','functions','logit_bias','logprobs'):
+        for key in ('functions','logit_bias','logprobs'):
             if body.get(key): raise RequestError(f'{key} is not supported by this prototype')
         if body.get('response_format') not in (None,{'type':'text'}): raise RequestError('only response_format type=text is supported')
-        if body.get('tool_choice','none')!='none': raise RequestError('tool_choice must be none')
-        if body.get('reasoning_effort','low') not in ('none','low'): raise RequestError('reasoning_effort must be none or low')
         stream=body.get('stream',False)
         if type(stream) is not bool: raise RequestError('stream must be a boolean')
         options=body.get('stream_options',{})
@@ -181,12 +176,17 @@ class NativeBackend:
         if 'max_tokens' in body and 'max_completion_tokens' in body and body['max_tokens']!=body['max_completion_tokens']:
             raise RequestError('max_tokens and max_completion_tokens disagree')
         try:
-            prompt=self.template.render(messages=clean,tools=None,add_generation_prompt=True,reasoning_effort='low')+'<|channel|>final<|message|>'
+            # Keep legacy text-only requests on their original forced-final path.
+            # Explicit native effort levels allow analysis before final/handoff.
+            natural=bool(tools) or (explicit and effort!='none')
+            prompt=self.template.render(messages=clean,tools=tools or None,add_generation_prompt=True,
+                reasoning_effort='low' if effort=='none' else effort)
+            prompt+=prefix if natural else '<|channel|>final<|message|>'
             ids=self.tokenizer.encode(prompt,add_special_tokens=False).ids
         except Exception as error: raise RequestError(f'invalid chat template input: {error}') from error
         if not ids or len(ids)+predict-1>self.args.context:
             raise RequestError(f'prompt ({len(ids)} tokens) and output ({predict}) exceed context {self.args.context}')
-        return Plan(ids,predict,stream,stops,options.get('include_usage',False))
+        return Plan(ids,predict,stream,stops,options.get('include_usage',False),natural,'assistant'+prefix,validators,effort!='none')
     @contextmanager
     def run(self,plan):
         a=self.args
@@ -199,7 +199,8 @@ class NativeBackend:
             token_path=Path(token_file.name)
             with token_file: token_file.write(','.join(map(str,plan.ids)))
             command=[*self.engine_command,'--model',str(a.model.resolve()),'--tokens-file',str(token_path),
-                '--context',str(a.context),'--predict',str(plan.predict),'--eos','200002,199999,200012,200007',
+                '--context',str(a.context),'--predict',str(plan.predict),'--eos',
+                '200002,199999,200012' if plan.harmony else '200002,199999,200012,200007',
                 '--prompt-logits','last','--stream','--kv-context-needed']
             if not a.scalar: command+=['--fast-cpu']
             if a.expert_ptx:
@@ -260,9 +261,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200,{'object':'list','data':[{'id':MODEL_ID,'object':'model','created':0,'owned_by':'local',
                 'context_length':self.server.backend.args.context,
                 'modalities':{'input':['text'],'output':['text']},
-                # The template is currently fixed to low; other official model
-                # effort levels are not yet implemented by this adapter.
-                'supported_reasoning_levels':[{'effort':'low'}]}]})
+                'supported_reasoning_levels':[{'effort':level} for level in LEVELS]}]})
         elif path in ('','/health'):
             status=self.server.monitor.status()
             self._json(200,{'status':'busy' if status['busy'] else 'ok','model':MODEL_ID,'service':'strata',
@@ -311,11 +310,19 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header('Cache-Control','no-cache');self.send_header('X-Accel-Buffering','no')
                     self.send_header('Connection','close');self._cors();self.end_headers();self.close_connection=True
                     streaming_started=True;self._sse(chunk({'role':'assistant','content':''}))
-                renderer=StreamingAnswer(backend.tokenizer);stopper=TextStops(plan.stops);parts=[];heartbeat=time.monotonic()
+                renderer=(HarmonyAnswer(backend.tokenizer,plan.validators,plan.header,plan.expose_reasoning)
+                    if plan.harmony else StreamingAnswer(backend.tokenizer))
+                stopper=TextStops(plan.stops);parts=[];reason_parts=[];heartbeat=time.monotonic();protocol_stop=False
                 def emit(text):
                     if text:
                         parts.append(text)
                         if plan.stream: self._sse(chunk({'content':text}))
+                def deltas(items):
+                    for delta in items:
+                        if 'content' in delta: emit(stopper.feed(delta['content']))
+                        else:
+                            if 'reasoning_content' in delta: reason_parts.append(delta['reasoning_content'])
+                            if plan.stream: self._sse(chunk(delta))
                 for event in run.events():
                     if event is None:
                         if plan.stream and time.monotonic()-heartbeat>=5:
@@ -323,12 +330,24 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                     if event['id']<0 or event['id']>=backend.vocab: raise EngineError('native token outside tokenizer vocabulary')
                     self.server.monitor.token(event)
-                    emit(stopper.feed(renderer.feed(event['id'])))
-                    if stopper.matched: run.cancel();break
-                if not stopper.matched:
+                    if plan.harmony:
+                        deltas(renderer.feed(event['id']))
+                        protocol_stop=renderer.done
+                    else: emit(stopper.feed(renderer.feed(event['id'])))
+                    # Normally consume the native summary after a true EOS.
+                    # A final <|end|> needs early cancellation: it is not an EOS
+                    # while analysis messages are allowed to continue.
+                    if stopper.matched or (protocol_stop and not event.get('eos')): run.cancel();break
+                if not stopper.matched and not protocol_stop:
                     if not run.ids or (not run.eos and len(run.ids)!=plan.predict): raise EngineError('native generation ended unexpectedly')
-                    emit(stopper.feed(renderer.finish()));emit(stopper.finish())
-                finish='stop' if run.eos or stopper.matched else 'length'
+                if not stopper.matched:
+                    if plan.harmony: deltas(renderer.finish())
+                    else: emit(stopper.feed(renderer.finish()))
+                    emit(stopper.finish())
+                if plan.harmony and run.eos and not renderer.done:
+                    raise EngineError('native EOS without a complete Harmony response')
+                finish='stop' if run.eos or stopper.matched or protocol_stop else 'length'
+                if plan.harmony and renderer.called: finish='tool_calls'
                 outcome=finish
                 usage={'prompt_tokens':len(plan.ids),'completion_tokens':len(run.ids),'total_tokens':len(plan.ids)+len(run.ids)}
                 if plan.stream:
@@ -337,19 +356,24 @@ class Handler(BaseHTTPRequestHandler):
                         self._sse({'id':cid,'object':'chat.completion.chunk','created':created,'model':MODEL_ID,'choices':[],'usage':usage})
                     self._sse('[DONE]')
                 else:
+                    message={'role':'assistant','content':''.join(parts)}
+                    if reason_parts: message['reasoning_content']=''.join(reason_parts)
+                    if plan.harmony and renderer.tool_calls:
+                        message['tool_calls']=renderer.tool_calls
+                        if not parts: message['content']=None
                     timings={key:float(run.fields[key]) for key in ('prefill_seconds','first_token_seconds','decode_seconds',
                         'elapsed_seconds','decode_tokens_per_second') if key in run.fields}
                     self._json(200,{'id':cid,'object':'chat.completion','created':created,'model':MODEL_ID,
-                        'choices':[{'index':0,'message':{'role':'assistant','content':''.join(parts)},'finish_reason':finish}],
+                        'choices':[{'index':0,'message':message,'finish_reason':finish}],
                         'usage':usage,'timings':timings})
-        except (BrokenPipeError,ConnectionResetError,TimeoutError): outcome='disconnect'
+        except (ConnectionError,TimeoutError): outcome='disconnect'
         except Exception as error:
             outcome='timeout' if isinstance(error,(EngineTimeout,subprocess.TimeoutExpired)) else 'error'
             try:
                 if streaming_started:
                     self._sse({'error':{'message':str(error),'type':'server_error'}});self._sse('[DONE]')
                 else: self._error(500,str(error))
-            except (BrokenPipeError,ConnectionResetError,TimeoutError): pass
+            except (ConnectionError,TimeoutError): pass
         finally:
             self.server.monitor.finish(outcome,run.fields if run else {})
             backend.gate.release()

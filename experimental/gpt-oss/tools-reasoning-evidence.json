@@ -1,0 +1,439 @@
+{
+  "date": "2026-10-29",
+  "baseline_source_commit": "7d593ce",
+  "scope": "Experimental GPT-OSS chat API reasoning/tool protocol; no released Strata engine changes",
+  "validation": {
+    "full_ctest_suites_passed": 12,
+    "full_ctest_suites_failed": 0,
+    "final_targeted_ctest_suites_passed": 3,
+    "http_integration_cases_passed": 15,
+    "text_protocol_cases_passed": 8,
+    "http_log": "build-gpt-oss/api/tools-http-final.log",
+    "template_reference": "Downloaded real GGUF template compared with Transformers renderer"
+  },
+  "native_model_smoke": {
+    "date": "2026-10-29",
+    "model": "E:\\Files\\Codex_Files\\Qwen3.8f\\strata_data\\models\\gpt-oss-120b-MXFP4\\gpt-oss-120b-MXFP4.gguf",
+    "model_bytes": 63387346208,
+    "context": 2048,
+    "expert_cache_mib": 4096,
+    "cpu_expert_workers": 4,
+    "cases": [
+      {
+        "name": "forced_tool",
+        "request": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Call clock."
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "clock",
+                "description": "Get the current time.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": false
+                },
+                "strict": true
+              }
+            }
+          ],
+          "tool_choice": {
+            "type": "function",
+            "function": {
+              "name": "clock"
+            }
+          },
+          "reasoning_effort": "low",
+          "max_tokens": 32,
+          "model": "gpt-oss-120b-native",
+          "temperature": 0
+        },
+        "status": 200,
+        "wall_seconds": 103.30513900000005,
+        "response": {
+          "id": "chatcmpl-fc98966feddb",
+          "object": "chat.completion",
+          "created": 1793270661,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "call_d6f1eba31b014f52a3db5143",
+                    "type": "function",
+                    "function": {
+                      "name": "clock",
+                      "arguments": "{\n  \"type\": \"clock\",\n  \"arguments:\":  {\n    \"     \"   \n\n\n\nLooks like the user"
+                    }
+                  }
+                ]
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 122,
+            "completion_tokens": 32,
+            "total_tokens": 154
+          },
+          "timings": {
+            "prefill_seconds": 77.9288,
+            "first_token_seconds": 77.9288,
+            "decode_seconds": 20.9986,
+            "elapsed_seconds": 98.9274,
+            "decode_tokens_per_second": 1.47629
+          }
+        }
+      },
+      {
+        "name": "high_reasoning",
+        "request": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "1+1? Answer briefly."
+            }
+          ],
+          "reasoning_effort": "high",
+          "max_tokens": 96,
+          "model": "gpt-oss-120b-native",
+          "temperature": 0
+        },
+        "status": 200,
+        "wall_seconds": 123.09832079999978,
+        "response": {
+          "id": "chatcmpl-c8946733a55d",
+          "object": "chat.completion",
+          "created": 1793270764,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "2",
+                "reasoning_content": "The user asks: \"1+1? Answer briefly.\" So answer: \"2\". Probably just \"2\". Provide brief answer."
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 74,
+            "completion_tokens": 38,
+            "total_tokens": 112
+          },
+          "timings": {
+            "prefill_seconds": 84.7895,
+            "first_token_seconds": 84.7896,
+            "decode_seconds": 35.0762,
+            "elapsed_seconds": 119.866,
+            "decode_tokens_per_second": 1.05485
+          }
+        }
+      }
+    ],
+    "models": {
+      "object": "list",
+      "data": [
+        {
+          "id": "gpt-oss-120b-native",
+          "object": "model",
+          "created": 0,
+          "owned_by": "local",
+          "context_length": 2048,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "supported_reasoning_levels": [
+            {
+              "effort": "low"
+            },
+            {
+              "effort": "medium"
+            },
+            {
+              "effort": "high"
+            }
+          ]
+        }
+      ]
+    },
+    "prompt_levels": {
+      "low": {
+        "has_requested_reasoning": true,
+        "tokens": 71,
+        "open_assistant_header": true
+      },
+      "medium": {
+        "has_requested_reasoning": true,
+        "tokens": 71,
+        "open_assistant_header": true
+      },
+      "high": {
+        "has_requested_reasoning": true,
+        "tokens": 71,
+        "open_assistant_header": true
+      }
+    }
+  },
+  "limits": [
+    "One tool call per assistant turn; client executes tools.",
+    "Greedy decoding only; schemas validated after generation, without constrained decoding.",
+    "First 32-token forced-call probe returned incomplete arguments and length; this is not a successful tool call.",
+    "Full-model high reasoning completed analysis and final answer; medium and low effort rendering verified, without a broad reasoning-quality comparison.",
+    "Real SSE generation is covered by synthetic HTTP/producer tests; these native probes used buffered HTTP.",
+    "Successful named-call and tool-result probes do not establish reliable automatic selection or arbitrary schema performance."
+  ],
+  "actual_template_history_checks": {
+    "low": {
+      "matches_transformers": true,
+      "arguments_are_object": true,
+      "tool_result_present": true,
+      "reasoning_instruction": true
+    },
+    "medium": {
+      "matches_transformers": true,
+      "arguments_are_object": true,
+      "tool_result_present": true,
+      "reasoning_instruction": true
+    },
+    "high": {
+      "matches_transformers": true,
+      "arguments_are_object": true,
+      "tool_result_present": true,
+      "reasoning_instruction": true
+    }
+  },
+  "native_model_tool_retry_and_result": {
+    "date": "2026-10-29",
+    "model": "E:\\Files\\Codex_Files\\Qwen3.8f\\strata_data\\models\\gpt-oss-120b-MXFP4\\gpt-oss-120b-MXFP4.gguf",
+    "model_bytes": 63387346208,
+    "context": 2048,
+    "expert_cache_mib": 4096,
+    "cpu_expert_workers": 4,
+    "cases": [
+      {
+        "name": "forced_tool",
+        "request": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Call clock using exactly this empty JSON object as arguments: {}"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "clock",
+                "description": "Get the current time.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": false
+                },
+                "strict": true
+              }
+            }
+          ],
+          "tool_choice": {
+            "type": "function",
+            "function": {
+              "name": "clock"
+            }
+          },
+          "reasoning_effort": "low",
+          "max_tokens": 32,
+          "model": "gpt-oss-120b-native",
+          "temperature": 0
+        },
+        "status": 200,
+        "wall_seconds": 126.0275642000015,
+        "response": {
+          "id": "chatcmpl-0e4b62a7d4f4",
+          "object": "chat.completion",
+          "created": 1793270964,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "call_38b2b6886d3d4a18b806a998",
+                    "type": "function",
+                    "function": {
+                      "name": "clock",
+                      "arguments": "{}"
+                    }
+                  }
+                ]
+              },
+              "finish_reason": "tool_calls"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 131,
+            "completion_tokens": 2,
+            "total_tokens": 133
+          },
+          "timings": {
+            "prefill_seconds": 122.412,
+            "first_token_seconds": 122.413,
+            "decode_seconds": 0.53875,
+            "elapsed_seconds": 122.951,
+            "decode_tokens_per_second": 1.85615
+          }
+        }
+      },
+      {
+        "name": "tool_result_followup",
+        "request": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Call clock using exactly this empty JSON object as arguments: {}"
+            },
+            {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call_38b2b6886d3d4a18b806a998",
+                  "type": "function",
+                  "function": {
+                    "name": "clock",
+                    "arguments": "{}"
+                  }
+                }
+              ]
+            },
+            {
+              "role": "tool",
+              "tool_call_id": "call_38b2b6886d3d4a18b806a998",
+              "content": "12:34 UTC"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "clock",
+                "description": "Get the current time.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": false
+                },
+                "strict": true
+              }
+            }
+          ],
+          "tool_choice": "none",
+          "max_tokens": 32,
+          "model": "gpt-oss-120b-native",
+          "temperature": 0
+        },
+        "status": 200,
+        "wall_seconds": 85.36995470000329,
+        "response": {
+          "id": "chatcmpl-164aba611bfd",
+          "object": "chat.completion",
+          "created": 1793271090,
+          "model": "gpt-oss-120b-native",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "The current time is **12:34 UTC**."
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 112,
+            "completion_tokens": 13,
+            "total_tokens": 125
+          },
+          "timings": {
+            "prefill_seconds": 71.7641,
+            "first_token_seconds": 71.7642,
+            "decode_seconds": 10.6787,
+            "elapsed_seconds": 82.4429,
+            "decode_tokens_per_second": 1.12373
+          }
+        }
+      }
+    ],
+    "models": {
+      "object": "list",
+      "data": [
+        {
+          "id": "gpt-oss-120b-native",
+          "object": "model",
+          "created": 0,
+          "owned_by": "local",
+          "context_length": 2048,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "supported_reasoning_levels": [
+            {
+              "effort": "low"
+            },
+            {
+              "effort": "medium"
+            },
+            {
+              "effort": "high"
+            }
+          ]
+        }
+      ]
+    },
+    "prompt_levels": {
+      "low": {
+        "has_requested_reasoning": true,
+        "tokens": 71,
+        "open_assistant_header": true
+      },
+      "medium": {
+        "has_requested_reasoning": true,
+        "tokens": 71,
+        "open_assistant_header": true
+      },
+      "high": {
+        "has_requested_reasoning": true,
+        "tokens": 71,
+        "open_assistant_header": true
+      }
+    },
+    "real_history_template": {
+      "object_not_quoted": true,
+      "result_rendered": true
+    }
+  }
+}

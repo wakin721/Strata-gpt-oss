@@ -25,8 +25,9 @@ def answer_from_raw(raw,thinking=False,partial=False):
     return answer
 
 
-class StreamingAnswer:
-    def __init__(self,tokenizer,thinking=False):
+class ByteLevelDecoder:
+    """Decode token bytes without losing UTF-8 characters split across tokens."""
+    def __init__(self,tokenizer):
         config=json.loads(tokenizer.to_str())
         if config.get('decoder',{}).get('type')!='ByteLevel':
             raise ValueError('streaming currently requires the GPT-OSS ByteLevel decoder')
@@ -41,8 +42,21 @@ class StreamingAnswer:
         self.alphabet=alphabet
         self.added={token['id']:token['content'] for token in config.get('added_tokens',[])}
         self.tokenizer=tokenizer
-        self.thinking=thinking
         self.decoder=codecs.getincrementaldecoder('utf-8')('replace')
+    def feed(self,token_id):
+        if token_id in self.added: data=self.added[token_id].encode('utf-8')
+        else:
+            token=self.tokenizer.id_to_token(token_id)
+            if token is None: raise ValueError(f'invalid streamed token ID: {token_id}')
+            data=bytes(self.alphabet[char] for char in token)
+        return self.decoder.decode(data,final=False)
+    def finish(self): return self.decoder.decode(b'',final=True)
+
+
+class StreamingAnswer:
+    def __init__(self,tokenizer,thinking=False):
+        self.bytes=ByteLevelDecoder(tokenizer)
+        self.thinking=thinking
         self.raw=''
         self.printed=''
 
@@ -56,15 +70,10 @@ class StreamingAnswer:
         return delta
 
     def feed(self,token_id):
-        if token_id in self.added: data=self.added[token_id].encode('utf-8')
-        else:
-            token=self.tokenizer.id_to_token(token_id)
-            if token is None: raise ValueError(f'invalid streamed token ID: {token_id}')
-            data=bytes(self.alphabet[char] for char in token)
-        return self._update(self.decoder.decode(data,final=False),partial=True)
+        return self._update(self.bytes.feed(token_id),partial=True)
 
     def finish(self):
-        return self._update(self.decoder.decode(b'',final=True),partial=False)
+        return self._update(self.bytes.finish(),partial=False)
 
 
 def consume_stream(process,renderer,emit):

@@ -71,7 +71,7 @@ class Monitor:
                 'error':outcome in ('error','timeout')})
             if outcome=='disconnect': self.disconnects+=1
             if outcome=='timeout': self.timeouts+=1
-            self._event({'stop':'finished','length':'finished','disconnect':'disconnected','timeout':'timeout'}.get(outcome,'error'),outcome)
+            self._event({'stop':'finished','length':'finished','tool_calls':'finished','disconnect':'disconnected','timeout':'timeout'}.get(outcome,'error'),outcome)
             self.current=None
     def status(self):
         with self.lock:

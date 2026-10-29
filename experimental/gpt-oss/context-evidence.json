@@ -1,0 +1,91 @@
+{
+  "date": "2026-10-29",
+  "baseline_source_commit": "ee2de15",
+  "problem": "An experimental 4096-token API cap blocked the model's 131072-token configuration; CSV command-line transport also could not carry long Windows prompts",
+  "changes": [
+    "Parse positive context units and validate against GGUF metadata",
+    "Pass token IDs via a temporary file, removed after completion/cancel/start failure",
+    "API opts in to KV reservation for its prompt plus output-evaluation budget",
+    "Report actual KV payload/positions from the native decoder",
+    "Expose request timeout in launch scripts; preserve the user workspace's 128k setting"
+  ],
+  "regression": {
+    "ctest_suites_passed": 12,
+    "ctest_suites_failed": 0,
+    "log": "build-gpt-oss/api/context-ctest-final.log",
+    "api_integration_cases": 11,
+    "global_attention_closed_form_positions": 4097,
+    "global_attention_test_scope": "Tiny 1-layer 2-dimensional CPU model, zero Q/K, constant V, attention sink; independent n/(n+1) oracle",
+    "file_transport_native_check": "A valid 17-token CSV padded beyond 32767 bytes produces bit-identical logits/generation/reset to inline tokens",
+    "kv_reservation_check": {
+      "model_context": 131072,
+      "prompt_positions": 17,
+      "predictions": 4,
+      "reserved_positions": 20,
+      "payload_bytes": 3328
+    },
+    "long_api_transport_check": "A 20000-character byte-tokenized prompt exceeds 4096 tokens and Windows command length; fake subprocess verifies all IDs arrive through the file",
+    "startup_failure_and_cancellation_cleanup_checked": true,
+    "model_limit_exceeded_rejected": true
+  },
+  "real_model_short_probe": {
+    "configured_context": 131072,
+    "model_context_limit": 131072,
+    "prompt_tokens": 92,
+    "max_tokens": 4,
+    "answer": "4.",
+    "fields": {
+      "execution": "native_cpu_gpu_experts",
+      "attention_device": "cpu",
+      "chat_supported": "false",
+      "vocab": "201088",
+      "predicted_token_ids": "19,13,200002",
+      "logit_records": "3",
+      "last_argmax": "200002",
+      "evaluated_positions": "94",
+      "kv_capacity_positions": "95",
+      "kv_payload_bytes": "14008320",
+      "cpu_kernels": "avx2",
+      "cpu_expert_workers": "4",
+      "prefill_seconds": "102.535",
+      "decode_seconds": "1.42982",
+      "first_token_seconds": "102.535",
+      "decode_evaluations": "2",
+      "decode_tokens_per_second": "1.39878",
+      "elapsed_seconds": "103.964",
+      "profile_attention_seconds": "7.36621",
+      "profile_expert_seconds": "96.0782",
+      "profile_head_seconds": "0.501548",
+      "gpu_expert_calls": "5818",
+      "cpu_expert_calls": "7718",
+      "expert_cache_bytes": "4294218240",
+      "gpu_expert_syncs": "2979",
+      "cache_admission_seconds": "2.20176",
+      "group_hot_experts": "1"
+    },
+    "wall_seconds": 106.42305689999921,
+    "token_file_deleted": true,
+    "scope": "Real 120B short prompt under a 128k configured context; not a full 128k input test"
+  },
+  "real_launcher_monitor_capacity_smoke": {
+    "port": 2714,
+    "reasoning_levels": [
+      "low"
+    ],
+    "shared_access": "lan",
+    "monitor_cli_passed": true,
+    "shared_key_present": true,
+    "model": "gpt-oss-120b-native",
+    "active": 0,
+    "context": 131072
+  },
+  "limits": [
+    "The real model probe uses 92 prompt tokens under a 128k configured context, not 128k actual input",
+    "Full 128k model quality and throughput have not been validated",
+    "Sequential prefill and global attention remain slow for large inputs",
+    "HTTP body limit remains 2 MiB; native token file limit is 8 MiB",
+    "API default timeout remains 900 seconds; launcher exposes RequestTimeout",
+    "The previously documented Chinese writing-quality failure is not fixed by this change"
+  ],
+  "engine_sha256": "19b3c3895d50366f0bceb2280fd00ace87d314038b9216575ea674c63f41b54e"
+}

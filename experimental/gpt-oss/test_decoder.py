@@ -48,13 +48,13 @@ def encode(array,kind,rng):
     raise ValueError(kind)
 
 
-def fixture(path,*,dense_kind=0,expert_kind=0,yarn=False,pattern=None):
+def fixture(path,*,dense_kind=0,expert_kind=0,yarn=False,pattern=None,context=256):
     rng=np.random.default_rng(109)
     h,f,heads,kv,d,ne,k,vocab,layers=32,32,4,2,8,4,2,11,3
     meta={'general.architecture':'gpt-oss','gpt-oss.embedding_length':h,'gpt-oss.expert_feed_forward_length':f,
         'gpt-oss.block_count':layers,'gpt-oss.expert_count':ne,'gpt-oss.expert_used_count':k,
         'gpt-oss.attention.head_count':heads,'gpt-oss.attention.head_count_kv':kv,'gpt-oss.attention.key_length':d,
-        'gpt-oss.attention.value_length':d,'gpt-oss.context_length':256,'gpt-oss.attention.sliding_window':3,
+        'gpt-oss.attention.value_length':d,'gpt-oss.context_length':context,'gpt-oss.attention.sliding_window':3,
         'gpt-oss.rope.freq_base':150000.,'gpt-oss.attention.layer_norm_rms_epsilon':1e-5}
     if yarn:
         meta.update({'gpt-oss.rope.scaling.type':'yarn','gpt-oss.rope.scaling.factor':32.,
@@ -156,7 +156,8 @@ class DecoderTests(unittest.TestCase):
                 extra=(*extra,'--cpu-expert-workers',os.environ['GPT_OSS_CPU_WORKERS'])
             if os.environ.get('GPT_OSS_GROUP_HOT'):
                 extra=(*extra,'--group-hot-experts')
-        result=subprocess.run([str(CPU),'--model',str(path),'--tokens',','.join(map(str,ids)),
+        token_args=['--tokens',','.join(map(str,ids))] if ids is not None else []
+        result=subprocess.run([str(CPU),'--model',str(path),*token_args,
             '--context','256','--logits-out',str(out),*extra],capture_output=True,text=True,timeout=30)
         if os.environ.get('GPT_OSS_FAST_CPU') and 'AVX2/F16C kernels are unsupported' in result.stderr:
             self.skipTest('AVX2/F16C unavailable')
@@ -230,6 +231,63 @@ class DecoderTests(unittest.TestCase):
                 np.testing.assert_array_equal(actual,expected)
                 self.assertIn('evaluated_positions=10',result.stdout)
                 if reset: self.assertIn('reset_check=passed',result.stdout)
+
+    def test_large_token_file_and_request_sized_kv_preserve_results(self):
+        with tempfile.TemporaryDirectory(dir=TEMP) as folder:
+            path=Path(folder)/'model.gguf'
+            fixture(path,dense_kind=8,expert_kind=39,yarn=True,context=131072)
+            ids=[0,1,2,4,5,6,7,9,3,0,2,8,10,9,2,1,4]
+            normal=Path(folder)/'normal.bin';compact=Path(folder)/'compact.bin';token_file=Path(folder)/'prompt.tokens'
+            # Legal leading zeroes make the token file exceed Windows' command
+            # length limit while retaining a small, independently tested sequence.
+            token_file.write_text(','.join(str(token).zfill(2048) for token in ids),encoding='ascii')
+            self.assertGreater(token_file.stat().st_size,32767)
+            extra=('--context','131072','--predict','4','--reset-check')
+            baseline=self.run_cpu(path,ids,normal,extra)
+            result=self.run_cpu(path,None,compact,(*extra,'--tokens-file',str(token_file),'--kv-context-needed'))
+            self.assertEqual(baseline.returncode,0,baseline.stderr)
+            self.assertEqual(result.returncode,0,result.stderr)
+            np.testing.assert_array_equal(np.fromfile(normal,dtype='<f4'),np.fromfile(compact,dtype='<f4'))
+            self.assertIn('kv_capacity_positions=20\n',result.stdout)
+            self.assertIn('kv_payload_bytes=3328\n',result.stdout)
+            self.assertIn('reset_check=passed',result.stdout)
+            bad=self.run_cpu(path,None,Path(folder)/'bad.bin',('--context','131073','--tokens-file',str(token_file),'--kv-context-needed'))
+            self.assertNotEqual(bad.returncode,0)
+            self.assertIn('exceeds GGUF model limit',bad.stderr)
+
+    def test_global_attention_past_4096_against_closed_form(self):
+        if os.environ.get('GPT_OSS_GPU_PTX'):
+            self.skipTest('global attention/KV run on CPU; exercised in scalar and AVX2 suites')
+        with tempfile.TemporaryDirectory(dir=TEMP) as folder:
+            path=Path(folder)/'long-global.gguf';out=Path(folder)/'last.bin';prompt=Path(folder)/'prompt.tokens'
+            meta={'general.architecture':'gpt-oss','gpt-oss.embedding_length':2,'gpt-oss.expert_feed_forward_length':2,
+                'gpt-oss.block_count':1,'gpt-oss.expert_count':1,'gpt-oss.expert_used_count':1,
+                'gpt-oss.attention.head_count':1,'gpt-oss.attention.head_count_kv':1,'gpt-oss.attention.key_length':2,
+                'gpt-oss.context_length':131072,'gpt-oss.attention.sliding_window':128,
+                'gpt-oss.attention.sliding_window_pattern':[0]}
+            tensors=[]
+            def put(name,shape,values=None):
+                data=np.zeros(tuple(reversed(shape)),dtype='<f4') if values is None else np.asarray(values,dtype='<f4')
+                tensors.append((name,shape,0,data.tobytes()))
+            put('token_embd.weight',[2,2],[[1,.5],[0,0]])
+            put('output.weight',[2,2],np.eye(2));put('output_norm.weight',[2],[1,1])
+            for projection in ('q','k','v','output'):
+                put(f'blk.0.attn_{projection}.weight',[2,2],np.eye(2) if projection=='output' else None)
+                put(f'blk.0.attn_{projection}.bias',[2],[.5,-.25] if projection=='v' else None)
+            for name in ('attn_norm','post_attention_norm'): put(f'blk.0.{name}.weight',[2],[1,1])
+            put('blk.0.attn_sinks.weight',[1]);put('blk.0.ffn_gate_inp.weight',[2,1]);put('blk.0.ffn_gate_inp.bias',[1])
+            for projection in ('gate','up','down'):
+                put(f'blk.0.ffn_{projection}_exps.weight',[2,2,1]);put(f'blk.0.ffn_{projection}_exps.bias',[2,1])
+            fetch.write_fixture(path,meta,tensors)
+            count=4097;prompt.write_text(','.join(['0']*count),encoding='ascii')
+            result=self.run_cpu(path,None,out,('--context','131072','--tokens-file',str(prompt),'--prompt-logits','last','--kv-context-needed'))
+            self.assertEqual(result.returncode,0,result.stderr)
+            # Q/K=0, sink=0, and V is constant: attention is exactly n/(n+1)*V.
+            state=np.array([1.,.5])+count/(count+1)*np.array([.5,-.25])
+            expected=state/np.sqrt(np.mean(state*state)+1e-5)
+            np.testing.assert_allclose(np.fromfile(out,dtype='<f4'),expected,atol=2e-6,rtol=2e-6)
+            self.assertIn('evaluated_positions=4097\n',result.stdout)
+            self.assertIn('kv_payload_bytes=65552\n',result.stdout)
 
     def test_stream_events_preserve_logits_and_stop_at_eos(self):
         with tempfile.TemporaryDirectory(dir=TEMP) as folder:

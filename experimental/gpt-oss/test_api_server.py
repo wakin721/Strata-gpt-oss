@@ -18,7 +18,8 @@ from test_stream_text import tokenizer
 FAKE='''import argparse,json,sys,time
 from pathlib import Path
 config=json.loads(Path(sys.argv.pop(1)).read_text())
-parser=argparse.ArgumentParser();parser.add_argument('--predict',type=int);args,_=parser.parse_known_args()
+parser=argparse.ArgumentParser();parser.add_argument('--predict',type=int);parser.add_argument('--tokens-file',type=Path);args,_=parser.parse_known_args()
+prompt_ids=[int(value) for value in args.tokens_file.read_text(encoding='ascii').split(',')]
 if config.get('fail'):
  sys.stderr.write('test native failure '+('x'*100000));sys.exit(4)
 time.sleep(config.get('prefill',0))
@@ -33,6 +34,7 @@ for index,token in enumerate(ids):
  time.sleep(config.get('delay',0))
 print('predicted_token_ids='+','.join(map(str,ids)),flush=True)
 print('elapsed_seconds=0.1',flush=True)
+print('received_prompt_tokens='+str(len(prompt_ids)),flush=True)
 '''
 
 
@@ -48,7 +50,8 @@ class ApiTests(unittest.TestCase):
         write_fixture(model,{'general.architecture':'gpt-oss','gpt-oss.context_length':2048,
             'tokenizer.chat_template':"{% for m in messages %}{{ m.role }}:{{ m.content }}\n{% endfor %}"},[])
         args=Namespace(model=model,tokenizer=root/'tokenizer',engine=Path(sys.executable),context=2048,
-            expert_ptx=None,scalar=True,expert_cache_mib=1,cpu_expert_workers=1,group_hot_experts=False,request_timeout=5)
+            expert_ptx=None,scalar=True,expert_cache_mib=1,cpu_expert_workers=1,group_hot_experts=False,request_timeout=5,
+            scratch_dir=root/'scratch')
         self.backend=NativeBackend(args,[sys.executable,'-u',str(fake),str(self.config)])
         self.http=Server(('127.0.0.1',0),self.backend)
         self.thread=threading.Thread(target=self.http.serve_forever,kwargs={'poll_interval':.02},daemon=True);self.thread.start()
@@ -67,6 +70,7 @@ class ApiTests(unittest.TestCase):
         end=time.monotonic()+3
         while self.backend.gate.locked() and time.monotonic()<end: threading.Event().wait(.01)
         self.assertFalse(self.backend.gate.locked());self.assertIsNone(self.backend.active)
+        self.assertFalse(list(self.backend.scratch_dir.glob('*.tokens')))
     def test_models_auth_and_buffered_multiturn(self):
         status,data=self.request(path='/v1/models');self.assertEqual(status,200);self.assertEqual(data['data'][0]['id'],MODEL_ID)
         model=data['data'][0]
@@ -98,8 +102,37 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(self.request(path='/v1/models',headers={'Authorization':'Bearer '+key})[0],200)
         self.assertEqual(self.request(path='/v1/models',headers={'Authorization':'Bearer first-test, second-test'})[0],401)
         self.assertEqual(context_size('2k'),2048);self.assertEqual(context_size('4K'),4096)
-        for text in ('0','-1','256k','131072','bad'):
+        self.assertEqual(context_size('128k'),131072);self.assertEqual(context_size('131072'),131072)
+        for text in ('0','-1','bad'):
             with self.assertRaises(argparse.ArgumentTypeError): context_size(text)
+    def test_model_limit_and_large_prompt_file_transport(self):
+        large_model=Path(self.folder.name)/'large-context.gguf'
+        write_fixture(large_model,{'general.architecture':'gpt-oss','gpt-oss.context_length':131072,
+            'tokenizer.chat_template':"{% for m in messages %}{{ m.role }}:{{ m.content }}\n{% endfor %}"},[])
+        args=self.backend.args;args.model=large_model;args.context=131072
+        large=NativeBackend(args,self.backend.engine_command)
+        self.backend=large;self.http.backend=large;self.http.monitor.backend=large
+        plan=large.prepare(self.body(messages=[{'role':'user','content':'a'*20000}]))
+        self.assertGreater(len(plan.ids),4096)
+        self.assertGreater(len(','.join(map(str,plan.ids))),32767)
+        with large.run(plan) as run:
+            argv=run.process.args
+            token_path=Path(argv[argv.index('--tokens-file')+1])
+            self.assertTrue(token_path.is_file())
+            self.assertNotIn('--tokens',argv);self.assertIn('--kv-context-needed',argv)
+            self.assertLess(len(subprocess.list2cmdline(argv)),32767)
+            list(run.events())
+            self.assertEqual(int(run.fields['received_prompt_tokens']),len(plan.ids))
+        self.assertFalse(token_path.exists())
+        status,models=self.request(path='/v1/models')
+        self.assertEqual(models['data'][0]['context_length'],131072)
+        args.context=131073
+        with self.assertRaisesRegex(ValueError,'GGUF model limit 131072'): NativeBackend(args,large.engine_command)
+    def test_token_file_cleanup_when_process_cannot_start(self):
+        self.backend.engine_command=[str(Path(self.folder.name)/'missing-native-engine.exe')]
+        status,data=self.request(self.body())
+        self.assertEqual(status,500)
+        self.wait_idle()
     def test_strata_monitor_snapshot_metrics_and_cli(self):
         from strata_cli.client import Endpoint
         endpoint=Endpoint('http://127.0.0.1:'+str(self.http.server_address[1]))

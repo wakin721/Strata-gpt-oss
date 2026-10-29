@@ -33,16 +33,18 @@ std::vector<std::size_t> tokens(const std::string& text) {
 }
 int main(int argc,char** argv) {
     try {
-        std::string model, token_list, output, expert_ptx, trace_dir;
+        std::string model, token_list, token_file, output, expert_ptx, trace_dir;
         std::size_t predict=0,context=256;
         std::size_t cache_mib=64,cpu_workers=0;
         std::vector<std::size_t> stop_ids;
-        bool reset_check=false,fast_cpu=false,last_prompt_logits=false,stream=false,group_hot=false;
+        bool reset_check=false,fast_cpu=false,last_prompt_logits=false,stream=false,group_hot=false,kv_needed=false;
         for(int i=1;i<argc;++i) {
             const std::string key=argv[i];
             if(key=="--help") {
                 std::cout << "Experimental native CPU token-ID decoder. No tokenizer or chat API.\n"
                     "--model FILE --tokens 1,2,3 [--predict N] [--context N] [--logits-out FILE] [--reset-check]\n"
+                    "--tokens-file FILE accepts a comma-separated ASCII token list instead of --tokens.\n"
+                    "--kv-context-needed reserves KV for this prompt/output budget within --context.\n"
                     "Windows GPU experts: --expert-ptx FILE --expert-cache-mib N (attention remains on CPU).\n"
                     "Optional: --eos ID,ID stops generation; --trace-dir DIR writes per-layer F32 state.\n"
                     "Opt-in speed: --fast-cpu --prompt-logits last --cpu-expert-workers 1..16 (GPU mode).\n"
@@ -56,10 +58,12 @@ int main(int argc,char** argv) {
             if(key=="--fast-cpu") { fast_cpu=true; continue; }
             if(key=="--stream") { stream=true; continue; }
             if(key=="--group-hot-experts") { group_hot=true; continue; }
+            if(key=="--kv-context-needed") { kv_needed=true; continue; }
             if(i+1==argc) throw std::invalid_argument("missing value for "+key);
             const std::string value=argv[++i];
             if(key=="--model") model=value;
             else if(key=="--tokens") token_list=value;
+            else if(key=="--tokens-file") token_file=value;
             else if(key=="--predict") predict=number(value);
             else if(key=="--context") context=number(value);
             else if(key=="--logits-out") output=value;
@@ -74,12 +78,23 @@ int main(int argc,char** argv) {
             }
             else throw std::invalid_argument("unknown argument: "+key);
         }
-        if(model.empty() || token_list.empty()) throw std::invalid_argument("--model and --tokens are required");
+        if(model.empty() || token_list.empty()==token_file.empty()) throw std::invalid_argument("--model and exactly one of --tokens or --tokens-file are required");
         if(cpu_workers && expert_ptx.empty()) throw std::invalid_argument("--cpu-expert-workers requires --expert-ptx");
         if(group_hot && expert_ptx.empty()) throw std::invalid_argument("--group-hot-experts requires --expert-ptx");
+        if(!token_file.empty()) {
+            std::ifstream source(token_file,std::ios::binary|std::ios::ate);
+            if(!source) throw std::invalid_argument("cannot open token file");
+            const auto length=source.tellg();
+            if(length<=0 || length>8*1024*1024) throw std::invalid_argument("token file must be 1 byte to 8 MiB");
+            token_list.resize(static_cast<std::size_t>(length));source.seekg(0);
+            source.read(token_list.data(),static_cast<std::streamsize>(token_list.size()));
+            if(!source) throw std::runtime_error("cannot read token file");
+        }
         const auto ids=tokens(token_list);
+        if(ids.size()>context || (predict>0 && predict-1>context-ids.size())) throw std::invalid_argument("prompt and predictions exceed context");
         go::set_fast_cpu(fast_cpu);
         go::Loader loader(model);
+        if(context>go::meta_integer(loader.model.meta(),"gpt-oss.context_length")) throw std::invalid_argument("requested context exceeds GGUF model limit");
         go::MixtureRunner runner;
 #ifdef STRATA_GPT_OSS_CUDA_DRIVER
         std::unique_ptr<go::HybridExperts> hybrid;
@@ -90,8 +105,8 @@ int main(int argc,char** argv) {
 #else
         if(!expert_ptx.empty()) throw std::invalid_argument("GPU expert execution is currently Windows-only");
 #endif
-        go::Decoder decoder(loader,context,runner);
-        if(ids.size()>context || (predict>0 && predict-1>context-ids.size())) throw std::invalid_argument("prompt and predictions exceed context");
+        const auto kv_context=kv_needed ? ids.size()+(predict>0 ? predict-1 : 0) : context;
+        go::Decoder decoder(loader,kv_context,runner);
         for(auto id:ids) if(id>=decoder.config.vocab) throw std::invalid_argument("prompt token outside vocabulary");
         std::ofstream file;
         if(!output.empty()) {
@@ -143,6 +158,8 @@ int main(int argc,char** argv) {
         for(std::size_t i=0;i<generated.size();++i) { if(i) std::cout << ',';std::cout << generated[i]; }
         std::cout << "\nlogit_records=" << records << "\nlast_argmax=" << (std::max_element(logits.begin(),logits.end())-logits.begin())
                   << "\nevaluated_positions=" << positions
+                  << "\nkv_capacity_positions=" << kv_context
+                  << "\nkv_payload_bytes=" << decoder.kv_payload_bytes()
                   << "\ncpu_kernels=" << (fast_cpu ? "avx2" : "scalar")
                   << "\ncpu_expert_workers=" << cpu_workers
                   << "\nprefill_seconds=" << std::chrono::duration<double>(prefill_end-begin).count()

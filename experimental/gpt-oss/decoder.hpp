@@ -60,6 +60,11 @@ public:
     const Config config;
     Profile profile;
     std::size_t position() const { return position_; }
+    std::size_t kv_payload_bytes() const {
+        std::size_t bytes=0;
+        for(const auto& cache:caches_) bytes+=(cache.keys.size()+cache.values.size())*sizeof(float);
+        return bytes;
+    }
 private:
     Matrix embedding_, output_;
     std::vector<float> output_norm_;

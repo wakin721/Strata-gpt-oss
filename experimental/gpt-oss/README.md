@@ -136,7 +136,7 @@ On Windows, double-click `experimental\gpt-oss\start_api.bat`, or use PowerShell
 
 The launcher runs in the foreground. Ctrl+C stops the server and active native
 request. The default port is 8097, separate from released Strata's usual port.
-`-Port`, `-Context` (`2k`, `4k` or a token count), `-Access local|lan`, `-ExpertCacheMiB`, `-CpuExpertWorkers`, and
+`-Port`, `-Context` (`2k`, `4k`, `128k` or a token count), `-Access local|lan`, `-ExpertCacheMiB`, `-CpuExpertWorkers`, `-RequestTimeout`, and
 `-GroupHotExperts` customize the launcher; `python experimental/gpt-oss/api_server.py
 --help` lists the remaining options.
 
@@ -166,8 +166,9 @@ The native decoder currently samples greedily. Explicit requests for other
 temperatures, nontrivial sampling filters/penalties, tools, images, logprobs or
 structured output return 400 instead of silently ignoring those features.
 Only one native request runs at a time; concurrent requests receive 429.
-Context defaults to 2048 and is capped at 4096 in this adapter. Prompt plus
-requested output must fit that context; the API validates this before inference.
+The bundled API defaults to 2048 tokens. Its maximum comes from the loaded GGUF:
+the downloaded GPT-OSS-120B supports 131072 tokens (`128k`). Prompt plus requested
+output must fit the configured context; the API validates this before inference.
 
 For a simple buffered request in PowerShell:
 
@@ -201,7 +202,7 @@ comments while waiting, then content deltas when text becomes available; the
 role event is not a model first-token timing. A disconnected streaming client or
 request timeout cancels its child process. The API defaults to a 900 s timeout.
 
-Nine HTTP integration tests cover buffered/SSE output, a handshake proving text
+Eleven HTTP integration tests cover buffered/SSE output, a handshake proving text
 arrives before generation completes, UTF-8 stop strings, length limits, usage,
 auth, local-browser CORS, malformed/unsupported requests, engine failure, timeout, disconnect and
 single-flight release. Real 120B arithmetic API smoke results are recorded in
@@ -225,8 +226,9 @@ For the interactive monitor and an imported shared key, use:
 
 The user workspace also has `start_gpt_oss.bat` / `.ps1` and
 `monitor_gpt_oss.bat` / `.ps1` shortcuts. They reuse access/key settings from the
-Qwen IQ3 profile, keep GPT-OSS on port 8097, and default to a 2k context. Both
-accept `-Port`; the start script also accepts `-Context 4k` and `-Access local`.
+Qwen IQ3 profile and keep GPT-OSS on port 8097. The context is configured in the
+workspace launcher. Both accept `-Port`; the start script also accepts
+`-Context 128k`, `-Access local` and `-RequestTimeout` (seconds).
 The monitor uses the installed Strata client and the first configured key.
 Restart an older API process once to load the new endpoints.
 
@@ -241,8 +243,8 @@ no resident native model process. Request/activity records contain no prompt tex
 
 Port, local/LAN access, comma-separated keys, context units, and the monitor
 connection can match the old launcher's workflow. Qwen's 256k context and
-`--vision cpu` cannot be copied: this API is currently capped at 4096 tokens and
-GPT-OSS is text-only. `strata launch --family gpt-oss` is still not a supported
+`--vision cpu` cannot be copied: this GPT-OSS model has a 128k model limit and
+is text-only. `strata launch --family gpt-oss` is still not a supported
 catalog launch. Tunnel access, native-engine restart management and the other
 production engine switches have not been added to this adapter.
 
@@ -250,6 +252,39 @@ Monitor tests include the actual `strata monitor --once --json` command, live
 prefill/decode transitions, multi-key auth, and bounded context aliases. A separate
 PowerShell test checks that shared-profile parsing executes no launch or computed
 key expression. `monitor-evidence.json` records the installed-client smoke check.
+
+## 128k configuration and long-prompt transport
+
+The earlier 4096-token limit was a restriction in this experimental API, not the
+GPT-OSS model limit. It has been removed. `--context 128k` is parsed as 131072,
+checked against `gpt-oss.context_length`, and returned as `context_length` in model
+discovery and as the monitor's configured context. Requests above the GGUF limit
+are rejected with that model limit in the error.
+
+The API writes its prompt IDs into a temporary ASCII CSV file and passes
+`--tokens-file FILE` to the native executable, avoiding Windows' command-line
+length limit. Files are closed before inference and deleted after normal
+completion, stop, cancellation or process-start failure. They are not retained as
+prompt logs. Direct `--tokens 1,2,3` remains available for small diagnostic calls.
+
+The API also selects `--kv-context-needed`. This reserves KV payload for the
+prompt plus requested decode evaluations rather than the whole configured
+context. A short request under a 128k configuration therefore avoids reserving
+the full approximately 9 GiB F32 KV payload. The native executable reports
+`kv_capacity_positions` and `kv_payload_bytes`; direct CLI calls without the new
+flag retain their previous reservation behavior.
+
+Tests cover a real 4097-position global-attention calculation against a closed
+form, byte-identical logits/reset/generation with request-sized versus full KV,
+prompt files above Windows' command limit, model-limit validation, a large API
+prompt above 4k tokens, temporary-file cleanup on failure and configured 128k
+discovery. `context-evidence.json` separates these checks from the real 120B
+short-prompt probe and launcher/monitor checks at a 128k configured context.
+
+These checks do not validate full-model accuracy or throughput on an actual
+128k-token input. Prefill is still sequential, global attention grows with
+history, and a long request can need substantial RAM and time. The API timeout
+remains 900 s by default; `-RequestTimeout` can set a longer per-request budget.
 
 ## Further optimization checks on 2026-10-29
 

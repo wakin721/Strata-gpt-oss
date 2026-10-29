@@ -63,10 +63,10 @@ def integer(value,name,low,high):
 def context_size(text):
     try:
         value=int(text[:-1])*1024 if text.lower().endswith('k') else int(text)
-        if not 1<=value<=4096: raise ValueError()
+        if value<1: raise ValueError()
         return value
     except ValueError as error:
-        raise argparse.ArgumentTypeError('native API context must be 1..4096 tokens (for example 2k or 4k)') from error
+        raise argparse.ArgumentTypeError('context must be a positive token count, optionally with k (128k = 131072); the GGUF sets the maximum') from error
 
 
 class NativeRun:
@@ -129,8 +129,9 @@ class NativeBackend:
                 except EOFError: continue
             else: raise ValueError('GGUF directory exceeds 32 MiB')
         if metadata.get('general.architecture')!='gpt-oss': raise ValueError('expected gpt-oss GGUF')
-        if not 1<=args.context<=min(metadata['gpt-oss.context_length'],4096):
-            raise ValueError('API context must fit the model and be at most 4096 in this prototype')
+        self.model_context=metadata['gpt-oss.context_length']
+        if not 1<=args.context<=self.model_context:
+            raise ValueError(f'API context {args.context} exceeds the GGUF model limit {self.model_context}')
         self.template=compile_template(metadata['tokenizer.chat_template'])
         self.tokenizer=Tokenizer.from_file(str(args.tokenizer/'tokenizer.json'))
         self.vocab=self.tokenizer.get_vocab_size()
@@ -189,17 +190,30 @@ class NativeBackend:
     @contextmanager
     def run(self,plan):
         a=self.args
-        command=[*self.engine_command,'--model',str(a.model.resolve()),'--tokens',','.join(map(str,plan.ids)),
-            '--context',str(a.context),'--predict',str(plan.predict),'--eos','200002,199999,200012,200007',
-            '--prompt-logits','last','--stream']
-        if not a.scalar: command+=['--fast-cpu']
-        if a.expert_ptx:
-            command+=['--expert-ptx',str(a.expert_ptx.resolve()),'--expert-cache-mib',str(a.expert_cache_mib),
-                '--cpu-expert-workers',str(a.cpu_expert_workers)]
-            if a.group_hot_experts: command+=['--group-hot-experts']
-        run=NativeRun(command,a.request_timeout,self.scratch_dir);self.active=run
-        try: yield run
-        finally: run.close();self.active=None
+        token_path=None;run=None
+        try:
+            # Windows command lines cannot hold a long token list. Close the
+            # temporary file before the native process opens it, then delete it
+            # after the process exits (including cancellation/startup failure).
+            token_file=tempfile.NamedTemporaryFile(mode='w',encoding='ascii',suffix='.tokens',dir=self.scratch_dir,delete=False)
+            token_path=Path(token_file.name)
+            with token_file: token_file.write(','.join(map(str,plan.ids)))
+            command=[*self.engine_command,'--model',str(a.model.resolve()),'--tokens-file',str(token_path),
+                '--context',str(a.context),'--predict',str(plan.predict),'--eos','200002,199999,200012,200007',
+                '--prompt-logits','last','--stream','--kv-context-needed']
+            if not a.scalar: command+=['--fast-cpu']
+            if a.expert_ptx:
+                command+=['--expert-ptx',str(a.expert_ptx.resolve()),'--expert-cache-mib',str(a.expert_cache_mib),
+                    '--cpu-expert-workers',str(a.cpu_expert_workers)]
+                if a.group_hot_experts: command+=['--group-hot-experts']
+            run=NativeRun(command,a.request_timeout,self.scratch_dir);self.active=run
+            yield run
+        finally:
+            try:
+                if run: run.close()
+            finally:
+                self.active=None
+                if token_path: token_path.unlink(missing_ok=True)
     def cancel(self):
         run=self.active
         if run: run.cancel()
@@ -371,7 +385,9 @@ def main():
     key=os.environ.get(args.api_key_env) if args.api_key_env else args.api_key
     if (args.api_key_env or key is not None) and not any(x.strip() for x in (key or '').split(',')):
         parser.error('API key setting is empty')
-    backend=NativeBackend(args);server=Server(('0.0.0.0' if args.access=='lan' else '127.0.0.1',args.port),backend,key)
+    try: backend=NativeBackend(args)
+    except ValueError as error: parser.error(str(error))
+    server=Server(('0.0.0.0' if args.access=='lan' else '127.0.0.1',args.port),backend,key)
     print(f'GPT-OSS experimental API ready: http://127.0.0.1:{args.port}/v1; model={MODEL_ID}; temperature=0; access={args.access}',flush=True)
     monitor_script=root/'strata.py'
     credential_option=f' --credential-env "{args.api_key_env}"' if args.api_key_env else ''

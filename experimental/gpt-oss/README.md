@@ -8,7 +8,8 @@ It does not launch llama-server or Ollama.
 now completes short native forward passes and a template-based arithmetic text
 probe. A Python wrapper renders the GGUF's own Harmony template and handles text
 encoding/decoding. Broad output quality, long-context full-model parity, service
-integration and throughput remain unvalidated. It is not in the model catalog
+integration and sustained throughput remain unvalidated. Short local speed
+comparisons are recorded below. It is not in the model catalog
 and is never selected by the released engine.
 
 The normal build path is unchanged when `STRATA_GPT_OSS_PROTOTYPE_ONLY` is OFF
@@ -82,6 +83,70 @@ sequential and can take minutes, and output is displayed after generation.
 It has no conversation loop, tool execution, streaming API or background service.
 An optional `--output FILE.json` saves the explicit prompt's test result locally.
 
+## Opt-in speed mode, measured on 2026-10-29
+
+Add `--fast` to `run_prompt.py` to enable direct AVX2/F16C row dots, skip
+intermediate prompt vocabulary projections, and use four persistent CPU expert
+workers when GPU experts are enabled. The token-ID executable exposes these as
+`--fast-cpu --prompt-logits last --cpu-expert-workers 4`.
+The scalar/all-logits/async path remains the default. No new PTX is required.
+The CPU needs AVX2 and F16C; unsupported CPUs reject this opt-in explicitly.
+
+The worker design follows Strata's persistent CPU pool and concurrent CPU cache
+miss/GPU cache hit execution. It uses runtime GPT-OSS dimensions rather than the
+production pool's model-specific constants. Workers finish before results merge,
+including on errors; results always merge in router order. GPU attention, dense
+projections and batched prefill have not been added.
+
+Same-day sequential runs on Windows x64, Ryzen 7 9800X3D, RTX 5070 Ti 16 GB,
+driver 621.01, 48 GB RAM; original MXFP4/Q8_0 120B GGUF; 4 GiB expert cache:
+
+| Workload | Original | Fast mode | Speedup |
+| --- | ---: | ---: | ---: |
+| 13 prompt tokens + 8 predictions (20 evaluated positions) | 59.856 s | 10.148 / 10.305 s | 5.81–5.90x |
+| 92 prompt tokens + 2 predictions (93 evaluated positions) | 293.966 s | 64.214 / 43.457 s | 4.58–6.76x |
+
+The short workload is the last 13 tokens of the saved canonical arithmetic
+prompt, a diagnostic rather than a quality test. All 8 generated IDs match.
+The complete-template run still generates `[19,13]`, or `4.`. Timings cover
+model execution and in-run cache admission; model mapping, CUDA setup, Python
+tokenization and process startup are excluded. Each fast workload ran twice;
+the second pair confirms the final binary and produces identical retained logits.
+The longer run varies substantially with OS file-cache state and memory pressure,
+which were uncontrolled. This is not a sustained-throughput or cold-boot claim.
+
+Short-workload ablations: rebuilt scalar 58.446 s; AVX2 alone 19.040 s;
+AVX2 plus last-prompt logits 18.208 s; plus four persistent workers 10.148 s.
+In the final short run, prefill took 7.070 s and 7 further decode evaluations
+took 3.078 s (2.27 evaluated tokens/s). The full-template fast run spent
+57.89 of 64.21 s in expert mixture execution/cache admission, the remaining
+bottleneck. The confirmation run spent 37.00 of 43.46 s there. Increasing prefill
+throughput will require additional work. A separate final text-wrapper test
+generated `4.<|return|>` and stopped correctly in 44.19 s of engine time.
+
+The rebuilt default produces bit-identical logits to the saved original on all
+20 short positions. AVX2 changes accumulation order: relative L2 logits error
+is `1.97e-6` across those positions, and `3.15e-6` on the two saved full-template
+output positions; top-1 IDs agree throughout. Skipping intermediate heads and
+changing CPU scheduling preserve retained AVX2 logits bit-for-bit. This does
+not resolve the separately documented differences from GGML quantized dots.
+
+Seven test suites pass, including direct row dots against double accumulation
+for five formats, unaligned widths/tails, miniature NumPy decoder oracles,
+GPU/worker execution, last-logit generation/reset equality, and existing GGML
+checks. Other CPU architectures/backends have not been run.
+
+`speed-evidence.json` contains exact token IDs, raw engine metrics and numerical
+comparisons. To reproduce ablations, use a new output directory:
+
+```bat
+python experimental\gpt-oss\benchmark_speed.py --engine build-gpt-oss-ninja\experimental\gpt-oss\strata-gpt-oss-cpu.exe --model ..\strata_data\models\gpt-oss-120b-MXFP4\gpt-oss-120b-MXFP4.gguf --ptx build-gpt-oss\gpu_expert.ptx --tokens-json experimental\gpt-oss\speed-evidence.json --out build-gpt-oss\speed-new
+```
+
+Optional `--baseline-engine FILE` also runs a saved pre-optimization executable.
+Runs are sequential, caches start empty in each process, and existing output
+files are refused. Keep other model workloads idle for a useful comparison.
+
 ## Full-model checks on 2026-10-29
 
 The downloaded GGUF is `63,387,346,208` bytes. The downloader recorded successful
@@ -132,8 +197,9 @@ The bounded cache promotes frequently selected experts after a mixture completes
 Resident experts run on GPU while a CPU task computes the misses. Merge order
 follows router order. The cache budget counts expert weights/biases only; the CUDA
 context, kernels and activation buffers use additional VRAM. Attention and KV
-remain on CPU. This is a correctness prototype: per-mixture CPU task creation,
-per-expert GPU synchronization and activation transfers are not tuned. Frequency
+remain on CPU. Per-mixture CPU task creation can be replaced by the opt-in worker
+pool described above. Per-expert GPU synchronization and activation transfers
+are not tuned. Frequency
 counts do not decay yet. Do not infer a speed advantage over released Strata or
 an optimized llama.cpp build from these tests.
 
@@ -221,14 +287,15 @@ driver 621.01, using NVRTC 13.3.33.
 
 This reference comparison does **not** establish equality with GGML's quantized
 dot kernels, CUDA logits, a complete model, or end-to-end response quality.
-No generation-speed or quality claim is made.
+These correctness checks alone make no generation-speed or quality claim; the
+separate 2026-10-29 speed comparisons above cover only the listed workloads.
 
 ## Next native work
 
 1. Extend complete public-model parity beyond the short diagnostic sequence;
    investigate quantized activation-dot differences and longer contexts.
-2. Add persistent CPU workers, optimized vectorized quantized dots, GPU dense
-   projections/attention and KV placement. Measure cache eviction and long runs.
+2. Extend the opt-in vector kernels and persistent CPU workers with GPU dense
+   projections/attention, batched prefill and KV placement. Measure cache eviction and long runs.
 3. Compare real throughput/memory with a same-hardware optimized baseline before
    claiming a speed improvement or enabling a model catalog entry.
 4. Extend the one-shot Harmony wrapper to validated streaming and API handling. Choose speculation separately;

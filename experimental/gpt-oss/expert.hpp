@@ -20,6 +20,10 @@ struct Matrix {
 std::size_t row_bytes(std::size_t cols, Format format);
 void decode_row(const Matrix& weights, std::size_t row, std::span<float> output);
 void matvec(const Matrix& weights, std::span<const float> input, std::span<float> output);
+bool fast_cpu_supported();
+void set_fast_cpu(bool enabled);
+bool fast_cpu_enabled();
+float row_dot_avx2(const Matrix& weights,std::size_t row,std::span<const float> input);
 float swiglu(float gate, float up);
 
 struct Expert {

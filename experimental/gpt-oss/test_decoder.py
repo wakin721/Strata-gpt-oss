@@ -147,10 +147,17 @@ def reference(ids,meta,w):
 
 class DecoderTests(unittest.TestCase):
     def run_cpu(self,path,ids,out,extra=()):
+        if os.environ.get('GPT_OSS_FAST_CPU'):
+            extra=(*extra,'--fast-cpu')
         if os.environ.get('GPT_OSS_GPU_PTX'):
             extra=(*extra,'--expert-ptx',os.environ['GPT_OSS_GPU_PTX'],'--expert-cache-mib','1')
-        return subprocess.run([str(CPU),'--model',str(path),'--tokens',','.join(map(str,ids)),
+            if os.environ.get('GPT_OSS_CPU_WORKERS'):
+                extra=(*extra,'--cpu-expert-workers',os.environ['GPT_OSS_CPU_WORKERS'])
+        result=subprocess.run([str(CPU),'--model',str(path),'--tokens',','.join(map(str,ids)),
             '--context','256','--logits-out',str(out),*extra],capture_output=True,text=True,timeout=30)
+        if os.environ.get('GPT_OSS_FAST_CPU') and 'AVX2/F16C kernels are unsupported' in result.stderr:
+            self.skipTest('AVX2/F16C unavailable')
+        return result
 
     def test_batch_oracle_against_streaming_and_ring_wrap(self):
         cases=[(0,0,False,None),(8,39,True,None),(1,39,False,[0,1,0]),(30,0,True,[1,1,0])]
@@ -198,6 +205,28 @@ class DecoderTests(unittest.TestCase):
                 result=self.run_cpu(path,bad_ids,bad,extra)
                 self.assertNotEqual(result.returncode,0)
                 self.assertFalse(bad.exists())
+
+    def test_last_prompt_logits_preserves_generation_and_reset(self):
+        with tempfile.TemporaryDirectory(dir=TEMP) as folder:
+            path=Path(folder)/'model.gguf'
+            fixture(path,dense_kind=8,expert_kind=39,yarn=True)
+            ids=[0,1,4,2,5,9,3]
+            full=Path(folder)/'all.bin'
+            result=self.run_cpu(path,ids,full,('--predict','4'))
+            self.assertEqual(result.returncode,0,result.stderr)
+            full_logits=np.fromfile(full,dtype='<f4').reshape(10,-1)
+            predicted=next(line for line in result.stdout.splitlines() if line.startswith('predicted_token_ids='))
+            for reset in (False,True):
+                out=Path(folder)/f'last-{reset}.bin'
+                extra=('--predict','4','--prompt-logits','last',*(['--reset-check'] if reset else []))
+                result=self.run_cpu(path,ids,out,extra)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn(predicted+'\n',result.stdout)
+                actual=np.fromfile(out,dtype='<f4').reshape(5 if reset else 4,-1)
+                expected=full_logits[[0,6,7,8,9] if reset else [6,7,8,9]]
+                np.testing.assert_array_equal(actual,expected)
+                self.assertIn('evaluated_positions=10',result.stdout)
+                if reset: self.assertIn('reset_check=passed',result.stdout)
 
 
 if __name__=='__main__': unittest.main()

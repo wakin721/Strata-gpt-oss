@@ -35,9 +35,9 @@ int main(int argc,char** argv) {
     try {
         std::string model, token_list, output, expert_ptx, trace_dir;
         std::size_t predict=0,context=256;
-        std::size_t cache_mib=64;
+        std::size_t cache_mib=64,cpu_workers=0;
         std::vector<std::size_t> stop_ids;
-        bool reset_check=false;
+        bool reset_check=false,fast_cpu=false,last_prompt_logits=false;
         for(int i=1;i<argc;++i) {
             const std::string key=argv[i];
             if(key=="--help") {
@@ -45,10 +45,13 @@ int main(int argc,char** argv) {
                     "--model FILE --tokens 1,2,3 [--predict N] [--context N] [--logits-out FILE] [--reset-check]\n"
                     "Windows GPU experts: --expert-ptx FILE --expert-cache-mib N (attention remains on CPU).\n"
                     "Optional: --eos ID,ID stops generation; --trace-dir DIR writes per-layer F32 state.\n"
-                    "Logits: little-endian float32, one vocab-sized record for every evaluated token.\n";
+                    "Opt-in speed: --fast-cpu --prompt-logits last --cpu-expert-workers 1..16 (GPU mode).\n"
+                    "Logits: little-endian float32; --prompt-logits all (default) emits every position;\n"
+                    "last emits only the last prompt and generated positions (plus first with --reset-check).\n";
                 return 0;
             }
             if(key=="--reset-check") { reset_check=true; continue; }
+            if(key=="--fast-cpu") { fast_cpu=true; continue; }
             if(i+1==argc) throw std::invalid_argument("missing value for "+key);
             const std::string value=argv[++i];
             if(key=="--model") model=value;
@@ -58,18 +61,25 @@ int main(int argc,char** argv) {
             else if(key=="--logits-out") output=value;
             else if(key=="--expert-ptx") expert_ptx=value;
             else if(key=="--expert-cache-mib") cache_mib=number(value);
+            else if(key=="--cpu-expert-workers") cpu_workers=number(value);
             else if(key=="--trace-dir") trace_dir=value;
             else if(key=="--eos") stop_ids=tokens(value);
+            else if(key=="--prompt-logits") {
+                if(value!="all" && value!="last") throw std::invalid_argument("--prompt-logits expects all or last");
+                last_prompt_logits=value=="last";
+            }
             else throw std::invalid_argument("unknown argument: "+key);
         }
         if(model.empty() || token_list.empty()) throw std::invalid_argument("--model and --tokens are required");
+        if(cpu_workers && expert_ptx.empty()) throw std::invalid_argument("--cpu-expert-workers requires --expert-ptx");
         const auto ids=tokens(token_list);
+        go::set_fast_cpu(fast_cpu);
         go::Loader loader(model);
         go::MixtureRunner runner;
 #ifdef STRATA_GPT_OSS_CUDA_DRIVER
         std::unique_ptr<go::HybridExperts> hybrid;
         if(!expert_ptx.empty()) {
-            hybrid=std::make_unique<go::HybridExperts>(loader,expert_ptx,cache_mib);
+            hybrid=std::make_unique<go::HybridExperts>(loader,expert_ptx,cache_mib,cpu_workers);
             runner=[&](auto layer,const auto& routes,auto input) { return hybrid->mixture(layer,routes,input); };
         }
 #else
@@ -85,27 +95,29 @@ int main(int argc,char** argv) {
             if(!file) throw std::runtime_error("cannot create logits output");
         }
         std::vector<float> logits,first;
-        std::size_t records=0;
+        std::size_t records=0,positions=0;
         if(!trace_dir.empty()) std::filesystem::create_directories(trace_dir);
-        auto forward=[&](std::size_t token) {
+        auto forward=[&](std::size_t token,bool emit=true) {
             go::BlockObserver observer;
             if(!trace_dir.empty()) observer=[&](std::size_t layer,std::span<const float> state) {
-                const auto path=std::filesystem::path(trace_dir)/(std::to_string(records)+"-l_out-"+std::to_string(layer)+".f32");
+                const auto path=std::filesystem::path(trace_dir)/(std::to_string(positions)+"-l_out-"+std::to_string(layer)+".f32");
                 std::ofstream trace(path,std::ios::binary);
                 trace.write(reinterpret_cast<const char*>(state.data()),state.size_bytes());
                 if(!trace) throw std::runtime_error("cannot write layer trace");
             };
-            logits=decoder.forward(token,observer); ++records;
-            if(file.is_open()) {
+            logits=decoder.forward(token,observer,emit); ++positions;
+            if(emit) ++records;
+            if(file.is_open() && emit) {
                 file.write(reinterpret_cast<const char*>(logits.data()),static_cast<std::streamsize>(logits.size()*sizeof(float)));
                 if(!file) throw std::runtime_error("writing logits failed");
             }
         };
         const auto begin=std::chrono::steady_clock::now();
-        for(auto id:ids) {
-            forward(id);
-            if(first.empty()) first=logits;
+        for(std::size_t i=0;i<ids.size();++i) {
+            forward(ids[i],!last_prompt_logits || i+1==ids.size() || (reset_check && i==0));
+            if(i==0) first=logits;
         }
+        const auto prefill_end=std::chrono::steady_clock::now();
         std::cout << "execution=" << (runner ? "native_cpu_gpu_experts" : "native_cpu_reference")
                   << "\nattention_device=cpu\nchat_supported=false\nvocab=" << decoder.config.vocab << "\npredicted_token_ids=";
         for(std::size_t i=0;i<predict;++i) {
@@ -116,7 +128,15 @@ int main(int argc,char** argv) {
             if(i+1<predict) forward(next);
         }
         std::cout << "\nlogit_records=" << records << "\nlast_argmax=" << (std::max_element(logits.begin(),logits.end())-logits.begin())
-                  << "\nelapsed_seconds=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count() << '\n';
+                  << "\nevaluated_positions=" << positions
+                  << "\ncpu_kernels=" << (fast_cpu ? "avx2" : "scalar")
+                  << "\ncpu_expert_workers=" << cpu_workers
+                  << "\nprefill_seconds=" << std::chrono::duration<double>(prefill_end-begin).count()
+                  << "\ndecode_seconds=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-prefill_end).count()
+                  << "\nelapsed_seconds=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count()
+                  << "\nprofile_attention_seconds=" << decoder.profile.attention_seconds
+                  << "\nprofile_expert_seconds=" << decoder.profile.expert_seconds
+                  << "\nprofile_head_seconds=" << decoder.profile.head_seconds << '\n';
         if(reset_check) {
             decoder.reset();
             const auto reset=decoder.forward(ids[0]);

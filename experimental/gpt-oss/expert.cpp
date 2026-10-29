@@ -5,9 +5,14 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <atomic>
+#if defined(_MSC_VER) && defined(_M_X64)
+#include <intrin.h>
+#endif
 
 namespace strata::gpt_oss {
 namespace {
+std::atomic<bool> use_fast{false};
 std::size_t product(std::size_t a, std::size_t b) {
     if (b && a > std::numeric_limits<std::size_t>::max() / b)
         throw std::invalid_argument("GPT-OSS: matrix size overflow");
@@ -68,6 +73,22 @@ void decode_unchecked(const Matrix& w, std::size_t row, std::span<float> output)
 }
 }
 
+bool fast_cpu_supported() {
+#if defined(_MSC_VER) && defined(_M_X64)
+    int r[4];__cpuid(r,1);
+    if(!(r[2]&(1<<27)) || !(r[2]&(1<<28)) || !(r[2]&(1<<29)) || (_xgetbv(0)&6)!=6) return false;
+    __cpuidex(r,7,0);return (r[1]&(1<<5))!=0;
+#elif defined(__x86_64__) && defined(STRATA_GPT_OSS_AVX2)
+    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("f16c");
+#else
+    return false;
+#endif
+}
+void set_fast_cpu(bool enabled) {
+    require(!enabled || fast_cpu_supported(),"AVX2/F16C kernels are unsupported on this CPU");
+    use_fast.store(enabled);
+}
+bool fast_cpu_enabled() { return use_fast.load(); }
 std::size_t row_bytes(std::size_t cols, Format format) {
     if (format == Format::F32) return product(cols, sizeof(float));
     if (format == Format::F16 || format == Format::BF16) return product(cols, 2);
@@ -87,6 +108,12 @@ void decode_row(const Matrix& weights, std::size_t row, std::span<float> output)
 void matvec(const Matrix& weights, std::span<const float> input, std::span<float> output) {
     weights.validate();
     require(input.size() == weights.cols && output.size() == weights.rows, "GPT-OSS: matvec shape mismatch");
+#ifdef STRATA_GPT_OSS_AVX2
+    if(fast_cpu_enabled()) {
+        for(std::size_t i=0;i<weights.rows;++i) output[i]=row_dot_avx2(weights,i,input);
+        return;
+    }
+#endif
     std::vector<float> row(weights.cols);
     for (std::size_t i = 0; i < weights.rows; ++i) {
         decode_unchecked(weights, i, row);
@@ -115,6 +142,12 @@ void evaluate(const Expert& expert, std::span<const float> input,
     require(scratch.row.size() >= (std::max)(h, f) && scratch.hidden.size() >= f, "GPT-OSS: scratch is too small");
     auto row = std::span<float>(scratch.row).first(h);
     for (std::size_t i = 0; i < f; ++i) {
+#ifdef STRATA_GPT_OSS_AVX2
+        if(fast_cpu_enabled()) {
+            scratch.hidden[i]=swiglu(row_dot_avx2(expert.gate,i,input)+expert.gate_bias[i],row_dot_avx2(expert.up,i,input)+expert.up_bias[i]);
+            continue;
+        }
+#endif
         decode_unchecked(expert.gate, i, row);
         const float gate = dot(row, input) + expert.gate_bias[i];
         decode_unchecked(expert.up, i, row);
@@ -123,6 +156,12 @@ void evaluate(const Expert& expert, std::span<const float> input,
     }
     row = std::span<float>(scratch.row).first(f);
     for (std::size_t i = 0; i < h; ++i) {
+#ifdef STRATA_GPT_OSS_AVX2
+        if(fast_cpu_enabled()) {
+            output[i]=row_dot_avx2(expert.down,i,std::span<const float>(scratch.hidden).first(f))+expert.down_bias[i];
+            continue;
+        }
+#endif
         decode_unchecked(expert.down, i, row);
         output[i] = dot(row, std::span<const float>(scratch.hidden).first(f)) + expert.down_bias[i];
     }

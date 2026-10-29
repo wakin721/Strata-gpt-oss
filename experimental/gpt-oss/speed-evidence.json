@@ -1,0 +1,503 @@
+{
+  "date": "2026-10-29",
+  "baseline_source_commit": "b64fd25",
+  "scope": "Native experimental GPT-OSS-120B only; opt-in; no production-engine changes",
+  "hardware": {
+    "os": "Windows x64",
+    "cpu": "AMD Ryzen 7 9800X3D 8-Core Processor",
+    "gpu": "NVIDIA GeForce RTX 5070 Ti 16 GB",
+    "driver": "621.01",
+    "ram_gib": 47.66
+  },
+  "model": {
+    "filename": "gpt-oss-120b-MXFP4.gguf",
+    "bytes": 63387346208,
+    "sha256": "582bd40f6886200101f4c4ed9f25f3fe80cc14c86e9e2b37746cd8904a0c622d"
+  },
+  "expert_cache_mib": 4096,
+  "context": 128,
+  "prompt_token_ids": [
+    200006,
+    17360,
+    200008,
+    3575,
+    553,
+    17554,
+    162016,
+    11,
+    261,
+    4410,
+    6439,
+    2359,
+    22203,
+    656,
+    7788,
+    17527,
+    558,
+    87447,
+    100594,
+    25,
+    220,
+    1323,
+    19,
+    12,
+    3218,
+    198,
+    6576,
+    3521,
+    25,
+    220,
+    1323,
+    21,
+    12,
+    702,
+    12,
+    2270,
+    279,
+    30377,
+    289,
+    25,
+    4465,
+    279,
+    2,
+    13888,
+    18403,
+    25,
+    8450,
+    11,
+    49159,
+    11,
+    1721,
+    13,
+    21030,
+    2804,
+    413,
+    7360,
+    395,
+    1753,
+    3176,
+    13,
+    200007,
+    200006,
+    77944,
+    200008,
+    2,
+    68406,
+    279,
+    3575,
+    553,
+    17554,
+    162016,
+    13,
+    30985,
+    483,
+    1327,
+    290,
+    2086,
+    364,
+    200007,
+    200006,
+    1428,
+    200008,
+    17,
+    10,
+    17,
+    30,
+    200007,
+    200006,
+    173781,
+    200005,
+    17196,
+    200008
+  ],
+  "workloads": {
+    "short": {
+      "prompt": "last 13 prompt_token_ids",
+      "predictions": 8,
+      "evaluated_positions": 20,
+      "quality_test": false
+    },
+    "template": {
+      "prompt": "all 92 prompt_token_ids",
+      "predictions": 2,
+      "evaluated_positions": 93,
+      "decoded_output": "4."
+    }
+  },
+  "timing_scope": "Engine execution after model mapping/CUDA initialization; includes in-run cache admission; excludes process startup and Python tokenization",
+  "limitations": [
+    "Sequential single-run ablations plus two fast-mode confirmation runs; not a statistical benchmark",
+    "OS file cache and external memory pressure uncontrolled; no cold-boot claim",
+    "No comparison against optimized llama.cpp or released Strata throughput",
+    "No long-context or broad output-quality validation"
+  ],
+  "runs": {
+    "short-baseline": {
+      "log_path": "build-gpt-oss/speed/short-baseline.log",
+      "metrics": {
+        "execution": "native_cpu_gpu_experts",
+        "attention_device": "cpu",
+        "chat_supported": "false",
+        "vocab": 201088,
+        "predicted_token_ids": [
+          17,
+          659,
+          2550,
+          200007,
+          200006,
+          173781,
+          200005,
+          35644
+        ],
+        "logit_records": 20,
+        "last_argmax": 35644,
+        "elapsed_seconds": 59.8556,
+        "gpu_expert_calls": 1490,
+        "cpu_expert_calls": 1390,
+        "expert_cache_bytes": 4294218240
+      },
+      "raw_stdout": "execution=native_cpu_gpu_experts\nattention_device=cpu\nchat_supported=false\nvocab=201088\npredicted_token_ids=17,659,2550,200007,200006,173781,200005,35644\nlogit_records=20\nlast_argmax=35644\nelapsed_seconds=59.8556\ngpu_expert_calls=1490\ncpu_expert_calls=1390\nexpert_cache_bytes=4294218240\n"
+    },
+    "template-baseline": {
+      "log_path": "build-gpt-oss/speed/template-baseline.log",
+      "metrics": {
+        "execution": "native_cpu_gpu_experts",
+        "attention_device": "cpu",
+        "chat_supported": "false",
+        "vocab": 201088,
+        "predicted_token_ids": [
+          19,
+          13
+        ],
+        "logit_records": 93,
+        "last_argmax": 13,
+        "elapsed_seconds": 293.966,
+        "gpu_expert_calls": 5737,
+        "cpu_expert_calls": 7655,
+        "expert_cache_bytes": 4294218240
+      },
+      "raw_stdout": "execution=native_cpu_gpu_experts\nattention_device=cpu\nchat_supported=false\nvocab=201088\npredicted_token_ids=19,13\nlogit_records=93\nlast_argmax=13\nelapsed_seconds=293.966\ngpu_expert_calls=5737\ncpu_expert_calls=7655\nexpert_cache_bytes=4294218240\n"
+    },
+    "short-scalar": {
+      "log_path": "build-gpt-oss/speed/ablations/short-scalar.log",
+      "metrics": {
+        "execution": "native_cpu_gpu_experts",
+        "attention_device": "cpu",
+        "chat_supported": "false",
+        "vocab": 201088,
+        "predicted_token_ids": [
+          17,
+          659,
+          2550,
+          200007,
+          200006,
+          173781,
+          200005,
+          35644
+        ],
+        "logit_records": 20,
+        "last_argmax": 35644,
+        "evaluated_positions": 20,
+        "cpu_kernels": "scalar",
+        "cpu_expert_workers": 0,
+        "prefill_seconds": 41.1551,
+        "decode_seconds": 17.2903,
+        "elapsed_seconds": 58.4455,
+        "profile_attention_seconds": 17.1449,
+        "profile_expert_seconds": 30.9006,
+        "profile_head_seconds": 10.3918,
+        "gpu_expert_calls": 1490,
+        "cpu_expert_calls": 1390,
+        "expert_cache_bytes": 4294218240
+      },
+      "raw_stdout": "execution=native_cpu_gpu_experts\nattention_device=cpu\nchat_supported=false\nvocab=201088\npredicted_token_ids=17,659,2550,200007,200006,173781,200005,35644\nlogit_records=20\nlast_argmax=35644\nevaluated_positions=20\ncpu_kernels=scalar\ncpu_expert_workers=0\nprefill_seconds=41.1551\ndecode_seconds=17.2903\nelapsed_seconds=58.4455\nprofile_attention_seconds=17.1449\nprofile_expert_seconds=30.9006\nprofile_head_seconds=10.3918\ngpu_expert_calls=1490\ncpu_expert_calls=1390\nexpert_cache_bytes=4294218240\n"
+    },
+    "short-avx2": {
+      "log_path": "build-gpt-oss/speed/ablations/short-avx2.log",
+      "metrics": {
+        "execution": "native_cpu_gpu_experts",
+        "attention_device": "cpu",
+        "chat_supported": "false",
+        "vocab": 201088,
+        "predicted_token_ids": [
+          17,
+          659,
+          2550,
+          200007,
+          200006,
+          173781,
+          200005,
+          35644
+        ],
+        "logit_records": 20,
+        "last_argmax": 35644,
+        "evaluated_positions": 20,
+        "cpu_kernels": "avx2",
+        "cpu_expert_workers": 0,
+        "prefill_seconds": 13.893,
+        "decode_seconds": 5.14695,
+        "elapsed_seconds": 19.0399,
+        "profile_attention_seconds": 1.33069,
+        "profile_expert_seconds": 17.0034,
+        "profile_head_seconds": 0.699023,
+        "gpu_expert_calls": 1490,
+        "cpu_expert_calls": 1390,
+        "expert_cache_bytes": 4294218240
+      },
+      "raw_stdout": "execution=native_cpu_gpu_experts\nattention_device=cpu\nchat_supported=false\nvocab=201088\npredicted_token_ids=17,659,2550,200007,200006,173781,200005,35644\nlogit_records=20\nlast_argmax=35644\nevaluated_positions=20\ncpu_kernels=avx2\ncpu_expert_workers=0\nprefill_seconds=13.893\ndecode_seconds=5.14695\nelapsed_seconds=19.0399\nprofile_attention_seconds=1.33069\nprofile_expert_seconds=17.0034\nprofile_head_seconds=0.699023\ngpu_expert_calls=1490\ncpu_expert_calls=1390\nexpert_cache_bytes=4294218240\n"
+    },
+    "short-last": {
+      "log_path": "build-gpt-oss/speed/ablations/short-last.log",
+      "metrics": {
+        "execution": "native_cpu_gpu_experts",
+        "attention_device": "cpu",
+        "chat_supported": "false",
+        "vocab": 201088,
+        "predicted_token_ids": [
+          17,
+          659,
+          2550,
+          200007,
+          200006,
+          173781,
+          200005,
+          35644
+        ],
+        "logit_records": 8,
+        "last_argmax": 35644,
+        "evaluated_positions": 20,
+        "cpu_kernels": "avx2",
+        "cpu_expert_workers": 0,
+        "prefill_seconds": 13.5537,
+        "decode_seconds": 4.6541,
+        "elapsed_seconds": 18.2078,
+        "profile_attention_seconds": 1.28415,
+        "profile_expert_seconds": 16.5665,
+        "profile_head_seconds": 0.353721,
+        "gpu_expert_calls": 1490,
+        "cpu_expert_calls": 1390,
+        "expert_cache_bytes": 4294218240
+      },
+      "raw_stdout": "execution=native_cpu_gpu_experts\nattention_device=cpu\nchat_supported=false\nvocab=201088\npredicted_token_ids=17,659,2550,200007,200006,173781,200005,35644\nlogit_records=8\nlast_argmax=35644\nevaluated_positions=20\ncpu_kernels=avx2\ncpu_expert_workers=0\nprefill_seconds=13.5537\ndecode_seconds=4.6541\nelapsed_seconds=18.2078\nprofile_attention_seconds=1.28415\nprofile_expert_seconds=16.5665\nprofile_head_seconds=0.353721\ngpu_expert_calls=1490\ncpu_expert_calls=1390\nexpert_cache_bytes=4294218240\n"
+    },
+    "short-workers": {
+      "log_path": "build-gpt-oss/speed/ablations/short-workers.log",
+      "metrics": {
+        "execution": "native_cpu_gpu_experts",
+        "attention_device": "cpu",
+        "chat_supported": "false",
+        "vocab": 201088,
+        "predicted_token_ids": [
+          17,
+          659,
+          2550,
+          200007,
+          200006,
+          173781,
+          200005,
+          35644
+        ],
+        "logit_records": 8,
+        "last_argmax": 35644,
+        "evaluated_positions": 20,
+        "cpu_kernels": "avx2",
+        "cpu_expert_workers": 4,
+        "prefill_seconds": 7.06987,
+        "decode_seconds": 3.07836,
+        "elapsed_seconds": 10.1482,
+        "profile_attention_seconds": 1.25734,
+        "profile_expert_seconds": 8.54136,
+        "profile_head_seconds": 0.346217,
+        "gpu_expert_calls": 1490,
+        "cpu_expert_calls": 1390,
+        "expert_cache_bytes": 4294218240
+      },
+      "raw_stdout": "execution=native_cpu_gpu_experts\nattention_device=cpu\nchat_supported=false\nvocab=201088\npredicted_token_ids=17,659,2550,200007,200006,173781,200005,35644\nlogit_records=8\nlast_argmax=35644\nevaluated_positions=20\ncpu_kernels=avx2\ncpu_expert_workers=4\nprefill_seconds=7.06987\ndecode_seconds=3.07836\nelapsed_seconds=10.1482\nprofile_attention_seconds=1.25734\nprofile_expert_seconds=8.54136\nprofile_head_seconds=0.346217\ngpu_expert_calls=1490\ncpu_expert_calls=1390\nexpert_cache_bytes=4294218240\n"
+    },
+    "template-fast": {
+      "log_path": "build-gpt-oss/speed/ablations/template-fast.log",
+      "metrics": {
+        "execution": "native_cpu_gpu_experts",
+        "attention_device": "cpu",
+        "chat_supported": "false",
+        "vocab": 201088,
+        "predicted_token_ids": [
+          19,
+          13
+        ],
+        "logit_records": 2,
+        "last_argmax": 13,
+        "evaluated_positions": 93,
+        "cpu_kernels": "avx2",
+        "cpu_expert_workers": 4,
+        "prefill_seconds": 63.7331,
+        "decode_seconds": 0.480719,
+        "elapsed_seconds": 64.2139,
+        "profile_attention_seconds": 6.09962,
+        "profile_expert_seconds": 57.8922,
+        "profile_head_seconds": 0.206697,
+        "gpu_expert_calls": 5737,
+        "cpu_expert_calls": 7655,
+        "expert_cache_bytes": 4294218240
+      },
+      "raw_stdout": "execution=native_cpu_gpu_experts\nattention_device=cpu\nchat_supported=false\nvocab=201088\npredicted_token_ids=19,13\nlogit_records=2\nlast_argmax=13\nevaluated_positions=93\ncpu_kernels=avx2\ncpu_expert_workers=4\nprefill_seconds=63.7331\ndecode_seconds=0.480719\nelapsed_seconds=64.2139\nprofile_attention_seconds=6.09962\nprofile_expert_seconds=57.8922\nprofile_head_seconds=0.206697\ngpu_expert_calls=5737\ncpu_expert_calls=7655\nexpert_cache_bytes=4294218240\n"
+    },
+    "short-workers-confirmation": {
+      "log_path": "build-gpt-oss/speed/final/short-workers.log",
+      "metrics": {
+        "execution": "native_cpu_gpu_experts",
+        "attention_device": "cpu",
+        "chat_supported": "false",
+        "vocab": 201088,
+        "predicted_token_ids": [
+          17,
+          659,
+          2550,
+          200007,
+          200006,
+          173781,
+          200005,
+          35644
+        ],
+        "logit_records": 8,
+        "last_argmax": 35644,
+        "evaluated_positions": 20,
+        "cpu_kernels": "avx2",
+        "cpu_expert_workers": 4,
+        "prefill_seconds": 7.14036,
+        "decode_seconds": 3.1643,
+        "elapsed_seconds": 10.3047,
+        "profile_attention_seconds": 1.31969,
+        "profile_expert_seconds": 8.58499,
+        "profile_head_seconds": 0.396125,
+        "gpu_expert_calls": 1490,
+        "cpu_expert_calls": 1390,
+        "expert_cache_bytes": 4294218240
+      },
+      "raw_stdout": "execution=native_cpu_gpu_experts\nattention_device=cpu\nchat_supported=false\nvocab=201088\npredicted_token_ids=17,659,2550,200007,200006,173781,200005,35644\nlogit_records=8\nlast_argmax=35644\nevaluated_positions=20\ncpu_kernels=avx2\ncpu_expert_workers=4\nprefill_seconds=7.14036\ndecode_seconds=3.1643\nelapsed_seconds=10.3047\nprofile_attention_seconds=1.31969\nprofile_expert_seconds=8.58499\nprofile_head_seconds=0.396125\ngpu_expert_calls=1490\ncpu_expert_calls=1390\nexpert_cache_bytes=4294218240\n"
+    },
+    "template-fast-confirmation": {
+      "log_path": "build-gpt-oss/speed/final/template-fast.log",
+      "metrics": {
+        "execution": "native_cpu_gpu_experts",
+        "attention_device": "cpu",
+        "chat_supported": "false",
+        "vocab": 201088,
+        "predicted_token_ids": [
+          19,
+          13
+        ],
+        "logit_records": 2,
+        "last_argmax": 13,
+        "evaluated_positions": 93,
+        "cpu_kernels": "avx2",
+        "cpu_expert_workers": 4,
+        "prefill_seconds": 42.9866,
+        "decode_seconds": 0.470876,
+        "elapsed_seconds": 43.4574,
+        "profile_attention_seconds": 6.25477,
+        "profile_expert_seconds": 37.0047,
+        "profile_head_seconds": 0.194008,
+        "gpu_expert_calls": 5737,
+        "cpu_expert_calls": 7655,
+        "expert_cache_bytes": 4294218240
+      },
+      "raw_stdout": "execution=native_cpu_gpu_experts\nattention_device=cpu\nchat_supported=false\nvocab=201088\npredicted_token_ids=19,13\nlogit_records=2\nlast_argmax=13\nevaluated_positions=93\ncpu_kernels=avx2\ncpu_expert_workers=4\nprefill_seconds=42.9866\ndecode_seconds=0.470876\nelapsed_seconds=43.4574\nprofile_attention_seconds=6.25477\nprofile_expert_seconds=37.0047\nprofile_head_seconds=0.194008\ngpu_expert_calls=5737\ncpu_expert_calls=7655\nexpert_cache_bytes=4294218240\n"
+    }
+  },
+  "comparisons": {
+    "rebuilt_default_vs_original": {
+      "positions": 20,
+      "bit_equal": true,
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "top1_matches": 20
+    },
+    "avx2_vs_original": {
+      "positions": 20,
+      "bit_equal": false,
+      "max_absolute_error": 8.392333984375e-05,
+      "relative_l2": 1.9741377734390553e-06,
+      "top1_matches": 20
+    },
+    "last_vs_all_avx2": {
+      "positions": 8,
+      "bit_equal": true,
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "top1_matches": 8
+    },
+    "workers_vs_last_avx2": {
+      "positions": 8,
+      "bit_equal": true,
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "top1_matches": 8
+    },
+    "template_fast_vs_original": {
+      "positions": 2,
+      "bit_equal": false,
+      "max_absolute_error": 9.34600830078125e-05,
+      "relative_l2": 3.147674527764243e-06,
+      "top1_matches": 2
+    },
+    "final_short_vs_first_fast": {
+      "positions": 8,
+      "bit_equal": true,
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "top1_matches": 8
+    },
+    "final_template_vs_first_fast": {
+      "positions": 2,
+      "bit_equal": true,
+      "max_absolute_error": 0.0,
+      "relative_l2": 0.0,
+      "top1_matches": 2
+    }
+  },
+  "final_artifacts": {
+    "engine_sha256": "e6f1efd1e0d819aadb348cd644df6484da75bd4277d394183a70c22d5dc05b0f",
+    "ptx_sha256": "374b94f3e929e72b68b66ee07bf454c72321bf0a09417590922320e41eae016d",
+    "baseline_engine_sha256": "d89c1267facc002fde72f4332e86488a05f755d5ef4b2b293496a383462074e9"
+  },
+  "tests": {
+    "ctest_passed": 7,
+    "ctest_failed": 0,
+    "log": "build-gpt-oss/speed/build-final.log",
+    "fast_row_dot_format_width_cases": 27,
+    "rows_per_case": 7
+  },
+  "final_text_wrapper": {
+    "prototype": true,
+    "prompt_tokens": 92,
+    "generated_ids": [
+      19,
+      13,
+      200002
+    ],
+    "raw_output": "4.<|return|>",
+    "answer": "4.",
+    "engine_metrics": {
+      "execution": "native_cpu_gpu_experts",
+      "attention_device": "cpu",
+      "chat_supported": "false",
+      "vocab": "201088",
+      "predicted_token_ids": "19,13,200002",
+      "logit_records": "3",
+      "last_argmax": "200002",
+      "evaluated_positions": "94",
+      "cpu_kernels": "avx2",
+      "cpu_expert_workers": "4",
+      "prefill_seconds": "43.2057",
+      "decode_seconds": "0.986836",
+      "elapsed_seconds": "44.1925",
+      "profile_attention_seconds": "6.36384",
+      "profile_expert_seconds": "37.6092",
+      "profile_head_seconds": "0.21689",
+      "gpu_expert_calls": "5818",
+      "cpu_expert_calls": "7718",
+      "expert_cache_bytes": "4294218240"
+    }
+  }
+}

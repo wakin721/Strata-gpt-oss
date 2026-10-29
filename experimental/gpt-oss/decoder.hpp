@@ -16,6 +16,7 @@ struct AttentionWeights {
     std::vector<float> q_bias, k_bias, v_bias, output_bias, norm, post_norm, sinks;
 };
 struct Routes { std::vector<std::size_t> ids; std::vector<float> weights; };
+struct Profile { double attention_seconds=0,expert_seconds=0,head_seconds=0; };
 using MixtureRunner = std::function<std::vector<float>(std::size_t,const Routes&,std::span<const float>)>;
 using BlockObserver = std::function<void(std::size_t,std::span<const float>)>;
 Routes route(std::span<const float> logits, std::size_t top_k);
@@ -34,7 +35,7 @@ public:
     std::vector<float> attention(std::span<const float> input, KV& cache, std::size_t position,
                                  std::vector<float>& new_key, std::vector<float>& new_value) const;
     Routes routes(std::span<const float> post_attention, std::vector<float>& normalized) const;
-    std::vector<float> step(std::span<const float> input, KV& cache, std::size_t position, const MixtureRunner& runner = {}) const;
+    std::vector<float> step(std::span<const float> input, KV& cache, std::size_t position, const MixtureRunner& runner = {},Profile* profile=nullptr) const;
     const Config& config;
 private:
     Loader& loader_;
@@ -54,9 +55,10 @@ public:
     Decoder& operator=(const Decoder&) = delete;
     Decoder(Decoder&&) = delete;
     Decoder& operator=(Decoder&&) = delete;
-    std::vector<float> forward(std::size_t token,const BlockObserver& observer = {});
+    std::vector<float> forward(std::size_t token,const BlockObserver& observer = {},bool emit_logits=true);
     void reset();
     const Config config;
+    Profile profile;
     std::size_t position() const { return position_; }
 private:
     Matrix embedding_, output_;

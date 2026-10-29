@@ -4,6 +4,7 @@
 #include <limits>
 #include <numeric>
 #include <numbers>
+#include <chrono>
 
 namespace strata::gpt_oss {
 namespace {
@@ -173,10 +174,12 @@ Routes Block::routes(std::span<const float> post_attention,std::vector<float>& n
     normalized=norm(post_attention,weights_.post_norm,config.epsilon);
     return route(project(router_,normalized,router_bias_),config.top_k);
 }
-std::vector<float> Block::step(std::span<const float> input,KV& cache,std::size_t position,const MixtureRunner& runner) const {
+std::vector<float> Block::step(std::span<const float> input,KV& cache,std::size_t position,const MixtureRunner& runner,Profile* profile) const {
+    const auto start=std::chrono::steady_clock::now();
     std::vector<float> key,value,normalized;
     auto result=attention(input,cache,position,key,value);
     const auto selected=routes(result,normalized);
+    const auto attention_end=std::chrono::steady_clock::now();
     Scratch scratch(config.embedding,config.intermediate);
     std::vector<float> part(config.embedding), mixture(config.embedding);
     if(runner) {
@@ -196,6 +199,10 @@ std::vector<float> Block::step(std::span<const float> input,KV& cache,std::size_
     std::copy(key.begin(),key.end(),cache.keys.begin()+(position%cache.capacity)*cache.width);
     std::copy(value.begin(),value.end(),cache.values.begin()+(position%cache.capacity)*cache.width);
     ++cache.seen;
+    if(profile) {
+        profile->attention_seconds+=std::chrono::duration<double>(attention_end-start).count();
+        profile->expert_seconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-attention_end).count();
+    }
     return result;
 }
 Decoder::Decoder(Loader& loader,std::size_t max_context,MixtureRunner runner) : config(loader),max_context_(max_context),runner_(std::move(runner)) {
@@ -209,18 +216,23 @@ Decoder::Decoder(Loader& loader,std::size_t max_context,MixtureRunner runner) : 
         caches_.emplace_back(config.sliding[layer] ? (std::min)(config.window,max_context) : max_context,config.kv_heads*config.head_dim);
     }
 }
-std::vector<float> Decoder::forward(std::size_t token,const BlockObserver& observer) {
+std::vector<float> Decoder::forward(std::size_t token,const BlockObserver& observer,bool emit_logits) {
     require(token<config.vocab,"GPT-OSS: token ID outside vocabulary");
     require(position_<max_context_,"GPT-OSS: context capacity exceeded");
     try {
         std::vector<float> state(config.embedding);
         decode_row(embedding_,token,state);
         for(std::size_t i=0;i<blocks_.size();++i) {
-            state=blocks_[i].step(state,caches_[i],position_,runner_);
+            state=blocks_[i].step(state,caches_[i],position_,runner_,&profile);
             if(observer) observer(i,state);
         }
-        auto normalized=norm(state,output_norm_,config.epsilon);
-        std::vector<float> logits(config.vocab); matvec(output_,normalized,logits);
+        std::vector<float> logits;
+        const auto head_start=std::chrono::steady_clock::now();
+        if(emit_logits) {
+            auto normalized=norm(state,output_norm_,config.epsilon);
+            logits.resize(config.vocab); matvec(output_,normalized,logits);
+        }
+        profile.head_seconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-head_start).count();
         for(float x:logits) require(std::isfinite(x),"GPT-OSS: non-finite logits");
         ++position_;
         return logits;

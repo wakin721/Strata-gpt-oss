@@ -22,10 +22,13 @@ def main():
     parser.add_argument('--context',type=int,default=256)
     parser.add_argument('--expert-ptx',type=Path)
     parser.add_argument('--expert-cache-mib',type=int,default=4096)
+    parser.add_argument('--fast',action='store_true',help='Opt in to AVX2/F16C, last-prompt logits and persistent CPU expert workers')
+    parser.add_argument('--cpu-expert-workers',type=int,default=4,help='With --fast and --expert-ptx: persistent CPU workers (1..16)')
     parser.add_argument('--thinking',action='store_true',help='Allow analysis before final; otherwise request the final channel directly')
     parser.add_argument('--output',type=Path,help='Optional local JSON record')
     args=parser.parse_args()
     if args.max_new_tokens<1 or args.context<1: parser.error('token limits must be positive')
+    if not 1<=args.cpu_expert_workers<=16: parser.error('CPU expert workers must be between 1 and 16')
     if args.output and args.output.exists(): parser.error('output already exists; choose a new path')
     from fetch_expert import Header
     from tokenizers import Tokenizer
@@ -49,6 +52,9 @@ def main():
         '--context',str(args.context),'--predict',str(args.max_new_tokens),'--eos','200002,199999,200012']
     if args.expert_ptx:
         command+=['--expert-ptx',str(args.expert_ptx.resolve()),'--expert-cache-mib',str(args.expert_cache_mib)]
+    if args.fast:
+        command+=['--fast-cpu','--prompt-logits','last']
+        if args.expert_ptx: command+=['--cpu-expert-workers',str(args.cpu_expert_workers)]
     print(f'Native GPT-OSS prototype: {len(ids)} prompt tokens. Processing may take several minutes.',flush=True)
     process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=None,text=True,encoding='utf-8')
     try: stdout,_=process.communicate()
